@@ -9,10 +9,11 @@ import { fileURLToPath } from 'node:url';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const pin = JSON.parse(readFileSync(join(root, 'scripts', 'upstream.json'), 'utf8'));
 const target = join(root, '.upstream', 'markdown-for-humans');
-const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 
-const run = (command, args, cwd) => execFileSync(command, args, { cwd, stdio: 'inherit', shell: process.platform === 'win32' });
+const run = (command, args, cwd) => execFileSync(command, args, { cwd, stdio: 'inherit' });
 const read = (command, args, cwd) => execFileSync(command, args, { cwd, encoding: 'utf8' }).trim();
+// npm is a .cmd file on Windows, which only cmd.exe can start.
+const runNpm = (args, cwd) => (process.platform === 'win32' ? run('cmd.exe', ['/d', '/s', '/c', 'npm.cmd', ...args], cwd) : run('npm', args, cwd));
 
 const currentCommit = () => {
   try {
@@ -24,18 +25,20 @@ const currentCommit = () => {
 
 if (currentCommit() !== pin.commit) {
   if (existsSync(target)) rmSync(target, { recursive: true, force: true });
-  run('git', ['clone', '--depth', '1', '--branch', pin.tag, '--no-recurse-submodules', pin.repo, target], root);
+  run('git', ['-c', 'core.autocrlf=false', 'clone', '--depth', '1', '--branch', pin.tag, '--no-recurse-submodules', pin.repo, target], root);
   const got = currentCommit();
   if (got !== pin.commit) {
     throw new Error(`Upstream tag ${pin.tag} is at ${got}, but scripts/upstream.json pins ${pin.commit}. Review the change before updating the pin.`);
   }
 } else {
-  // Start from a clean tree so patches apply the same way every time.
-  run('git', ['checkout', '--', '.'], target);
+  // Start from a clean tree so patches apply the same way every time. node_modules is
+  // ignored by upstream's own .gitignore, so it stays.
+  run('git', ['reset', '--hard', '--quiet'], target);
+  run('git', ['clean', '-fdq'], target);
 }
 
 if (!existsSync(join(target, 'node_modules', '@tiptap', 'core'))) {
-  run(npm, ['ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], target);
+  runNpm(['ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], target);
 }
 
 const patchDir = join(root, 'patches');

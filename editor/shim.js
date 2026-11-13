@@ -7711,6 +7711,17 @@ ${GUEST_UI_LOOK_CSS}`;
     }
     return pieces.join(newline2);
   }
+  var FRONTMATTER = /^---[^\S\n]*\n[\s\S]*?\n---[^\S\n]*\n/;
+  function frontmatterIsTight(text2) {
+    const match2 = FRONTMATTER.exec(text2);
+    return match2 !== null && text2.length > match2[0].length && text2[match2[0].length] !== "\n";
+  }
+  function tightenFrontmatter(text2) {
+    const match2 = FRONTMATTER.exec(text2);
+    if (!match2) return text2;
+    const rest = text2.slice(match2[0].length);
+    return rest.startsWith("\n") && !rest.startsWith("\n\n") ? match2[0] + rest.slice(1) : text2;
+  }
   function unwrapFrontmatter(content) {
     if (!content.startsWith("```")) return content;
     const usesCrLf = content.includes("\r\n");
@@ -7766,8 +7777,9 @@ ${GUEST_UI_LOOK_CSS}`;
     }
     /** Markdown from the editor, in the form it would be written to the file. */
     normalize(editorContent) {
-      const policy = applyBlankLinePolicy(unwrapFrontmatter(editorContent), this.mode);
+      let policy = applyBlankLinePolicy(unwrapFrontmatter(editorContent), this.mode);
       if (policy === "") return policy;
+      if (frontmatterIsTight(this.saved)) policy = tightenFrontmatter(policy);
       const ending = this.saved.trim() === "" ? "\n" : trailingNewlines(this.saved);
       return policy.replace(/\n*$/, "") + ending;
     }

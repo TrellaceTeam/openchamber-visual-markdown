@@ -42,6 +42,17 @@ const changedLines = (before, after) => {
   return changed;
 };
 
+/** The one region where two texts differ: the lines between their common start and common end. */
+const changedRegion = (before, after) => {
+  const a = before.split('\n');
+  const b = after.split('\n');
+  let start = 0;
+  while (start < a.length && start < b.length && a[start] === b[start]) start += 1;
+  let end = 0;
+  while (end < a.length - start && end < b.length - start && a[a.length - 1 - end] === b[b.length - 1 - end]) end += 1;
+  return { line: start + 1, before: a.slice(start, a.length - end), after: b.slice(start, b.length - end) };
+};
+
 const expect = (condition, message) => {
   if (!condition) throw new Error(message);
 };
@@ -86,10 +97,13 @@ const checks = [
         await settle(page);
         expect((await hostState(page)).dirty === true, 'typing did not mark the file changed');
         const saved = await save(page);
-        const changed = changedLines(content, saved);
-        const detail = changed.slice(0, 4).map((entry) => `line ${entry.line}: ${JSON.stringify(entry.before)} -> ${JSON.stringify(entry.after)}`).join('; ');
-        expect(changed.length === 1, `expected one changed line, got ${changed.length}: ${detail}`);
-        expect(changed[0].after.includes('Zq'), `the changed line does not hold the typed text: ${detail}`);
+        const region = changedRegion(content, saved);
+        const detail = `at line ${region.line}: ${JSON.stringify(region.before.slice(0, 6))} -> ${JSON.stringify(region.after.slice(0, 6))}`;
+        // The edited block may be rewritten in the editor's style: a Setext heading becomes
+        // an ATX one, which is two lines turning into one. Nothing outside it may change.
+        const setext = /^(=+|-+)$/.test(region.before[1] ?? '');
+        expect(region.after.length === 1 && (region.before.length === 1 || (setext && region.before.length === 2)), `more than the edited line changed (${region.before.length} lines became ${region.after.length}) ${detail}`);
+        expect(region.after.join('\n').includes('Zq'), `the changed lines do not hold the typed text ${detail}`);
       }),
     ),
 

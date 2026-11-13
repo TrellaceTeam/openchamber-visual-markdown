@@ -30,6 +30,27 @@ export function wrapFrontmatter(content: string): string {
   return pieces.join(newline);
 }
 
+const FRONTMATTER = /^---[^\S\n]*\n[\s\S]*?\n---[^\S\n]*\n/;
+
+/** Whether the text has front matter with no blank line between it and what follows. */
+export function frontmatterIsTight(text: string): boolean {
+  const match = FRONTMATTER.exec(text);
+  return match !== null && text.length > match[0].length && text[match[0].length] !== '\n';
+}
+
+/**
+ * Remove the one blank line after the front matter.
+ *
+ * The editor shows front matter as a code block, and a code block is always followed by a
+ * blank line. A file written without that blank line gets it back taken out here.
+ */
+export function tightenFrontmatter(text: string): string {
+  const match = FRONTMATTER.exec(text);
+  if (!match) return text;
+  const rest = text.slice(match[0].length);
+  return rest.startsWith('\n') && !rest.startsWith('\n\n') ? match[0] + rest.slice(1) : text;
+}
+
 /** Turn a wrapped front matter block back into `---` delimited front matter. */
 export function unwrapFrontmatter(content: string): string {
   if (!content.startsWith('```')) return content;

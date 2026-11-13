@@ -14,7 +14,7 @@
  */
 import { applyBlankLinePolicy, type BlankLineMode } from '@upstream/shared/blankLinePolicy';
 import { hasSameBlankLineLayout, isMarkdownStructurallyEquivalent } from '@upstream/editor/markdownAstEquivalence';
-import { unwrapFrontmatter, wrapFrontmatter } from './frontmatter';
+import { frontmatterIsTight, tightenFrontmatter, unwrapFrontmatter, wrapFrontmatter } from './frontmatter';
 
 /** Above this size the "is it back to the saved text" check waits until typing pauses. */
 export const SETTLE_INLINE_MAX = 200_000;
@@ -70,8 +70,9 @@ export class DocumentHost {
 
   /** Markdown from the editor, in the form it would be written to the file. */
   normalize(editorContent: string): string {
-    const policy = applyBlankLinePolicy(unwrapFrontmatter(editorContent), this.mode);
+    let policy = applyBlankLinePolicy(unwrapFrontmatter(editorContent), this.mode);
     if (policy === '') return policy;
+    if (frontmatterIsTight(this.saved)) policy = tightenFrontmatter(policy);
     const ending = this.saved.trim() === '' ? '\n' : trailingNewlines(this.saved);
     return policy.replace(/\n*$/, '') + ending;
   }

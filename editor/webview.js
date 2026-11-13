@@ -234434,6 +234434,37 @@ ${template.diagram}
   // .upstream/markdown-for-humans/src/webview/editor.ts
   init_markedLexerNormalizer();
 
+  // .upstream/markdown-for-humans/src/webview/utils/exactBlankLines.ts
+  function installExactBlankLines(manager) {
+    const target = manager;
+    if (!target || typeof target.parseTokens !== "function" || typeof target.createImplicitEmptyParagraphsFromSpace !== "function") {
+      return false;
+    }
+    if (target.__exactBlankLinesInstalled) return true;
+    const parseTokens = target.parseTokens.bind(target);
+    const createImplicit = target.createImplicitEmptyParagraphsFromSpace.bind(target);
+    let depth = 0;
+    target.parseTokens = (tokens2, parseImplicitEmptyParagraphs) => {
+      depth += 1;
+      try {
+        return parseTokens(tokens2, parseImplicitEmptyParagraphs);
+      } finally {
+        depth -= 1;
+      }
+    };
+    target.createImplicitEmptyParagraphsFromSpace = (token2, previousIndex, nextIndex) => {
+      if (depth !== 1) return createImplicit(token2, previousIndex, nextIndex);
+      if (previousIndex === -1 || nextIndex === -1) return [];
+      const newlines = (token2.raw ?? "").match(/\n/g)?.length ?? 0;
+      return Array.from({ length: Math.max(0, newlines - 2) }, () => ({
+        type: "paragraph",
+        content: []
+      }));
+    };
+    target.__exactBlankLinesInstalled = true;
+    return true;
+  }
+
   // .upstream/markdown-for-humans/src/webview/features/outOfSyncBanner.ts
   init_l10n2();
   var banner = null;
@@ -250792,6 +250823,7 @@ ${text5}
         if (markedInstance) {
           installBlankLineLexerNormalizer(markedInstance);
         }
+        installExactBlankLines(markdownStorage.markdown ?? markdownStorage.storage?.markdown);
       } catch (error4) {
         console.warn("[MD4H] Failed to install blank-line lexer normalizer:", error4);
       }

@@ -1,0 +1,102 @@
+diff --git a/src/webview/editor.ts b/src/webview/editor.ts
+index 3e8fb80..0373880 100644
+--- a/src/webview/editor.ts
++++ b/src/webview/editor.ts
+@@ -52,6 +52,7 @@ import {
+ } from './utils/markdownSerialization';
+ import type { BlankLineMode } from '../shared/blankLinePolicy';
+ import { installBlankLineLexerNormalizer } from './utils/markedLexerNormalizer';
++import { installExactBlankLines } from './utils/exactBlankLines';
+ import {
+   setupImageDragDrop,
+   hasPendingImageSaves,
+@@ -1074,6 +1075,7 @@ function initializeEditor(initialContent: string) {
+       if (markedInstance) {
+         installBlankLineLexerNormalizer(markedInstance);
+       }
++      installExactBlankLines(markdownStorage.markdown ?? markdownStorage.storage?.markdown);
+     } catch (error) {
+       console.warn('[MD4H] Failed to install blank-line lexer normalizer:', error);
+     }
+diff --git a/src/webview/utils/exactBlankLines.ts b/src/webview/utils/exactBlankLines.ts
+new file mode 100644
+index 0000000..3f2470c
+--- /dev/null
++++ b/src/webview/utils/exactBlankLines.ts
+@@ -0,0 +1,76 @@
++/**
++ * Keep the exact number of blank lines between top-level blocks.
++ *
++ * Added by Visual Markdown (https://github.com/TrellaceTeam/openchamber-visual-markdown).
++ *
++ * @tiptap/markdown 3.31 turns the blank lines between two blocks into empty paragraphs
++ * itself, before any extension sees the "space" token: one empty paragraph for each
++ * "\n\n" pair after the first. Two blank lines therefore load as none, and four as one,
++ * while the serializer in markdownSerialization.ts writes one blank line plus one per
++ * empty paragraph. In `preserve` mode that drops a blank line from every gap of two or
++ * more the first time the document is edited.
++ *
++ * This restores the count BlankLinePreservation documents: a gap of N blank lines loads
++ * as N - 1 empty paragraphs, and saves as N blank lines again. Only top-level gaps are
++ * changed. Blank lines inside a list or a quote belong to that block's own source.
++ */
++
++interface SpaceToken {
++  readonly raw?: string;
++}
++
++interface BlankLineManager {
++  parseTokens?: (tokens: unknown[], parseImplicitEmptyParagraphs?: boolean) => unknown[];
++  createImplicitEmptyParagraphsFromSpace?: (
++    token: SpaceToken,
++    previousNonSpaceTokenIndex: number,
++    nextNonSpaceTokenIndex: number
++  ) => unknown[];
++  __exactBlankLinesInstalled?: boolean;
++}
++
++/**
++ * Patch one editor's Markdown manager. Idempotent.
++ *
++ * @param manager - `editor.markdown`, the @tiptap/markdown MarkdownManager
++ * @returns true when the manager has the methods this relies on
++ */
++export function installExactBlankLines(manager: unknown): boolean {
++  const target = manager as BlankLineManager | null | undefined;
++  if (
++    !target ||
++    typeof target.parseTokens !== 'function' ||
++    typeof target.createImplicitEmptyParagraphsFromSpace !== 'function'
++  ) {
++    return false;
++  }
++  if (target.__exactBlankLinesInstalled) return true;
++
++  const parseTokens = target.parseTokens.bind(target);
++  const createImplicit = target.createImplicitEmptyParagraphsFromSpace.bind(target);
++  let depth = 0;
++
++  target.parseTokens = (tokens, parseImplicitEmptyParagraphs) => {
++    depth += 1;
++    try {
++      return parseTokens(tokens, parseImplicitEmptyParagraphs);
++    } finally {
++      depth -= 1;
++    }
++  };
++
++  target.createImplicitEmptyParagraphsFromSpace = (token, previousIndex, nextIndex) => {
++    if (depth !== 1) return createImplicit(token, previousIndex, nextIndex);
++    // Blank lines before the first block or after the last are not a gap between blocks.
++    if (previousIndex === -1 || nextIndex === -1) return [];
++    const newlines = (token.raw ?? '').match(/\n/g)?.length ?? 0;
++    // Two newlines are the ordinary one-blank-line gap. Each one beyond is an extra blank line.
++    return Array.from({ length: Math.max(0, newlines - 2) }, () => ({
++      type: 'paragraph',
++      content: [],
++    }));
++  };
++
++  target.__exactBlankLinesInstalled = true;
++  return true;
++}
