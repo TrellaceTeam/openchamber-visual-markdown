@@ -382,9 +382,40 @@ const checks = [
     });
     await settle(page, 1500);
     const state = await hostState(page);
-    expect(state.toasts.some((toast) => /image/i.test(toast.message)), `no message about the image: ${JSON.stringify(state.toasts)}`);
+    expect(state.toasts.some((toast) => /picture/i.test(toast.message)), `no message about the picture: ${JSON.stringify(state.toasts)}`);
+    expect((await frame.locator('.export-settings-overlay, [role="dialog"]').count()) === 0, 'a dialog opened for a picture that cannot be saved');
     const saved = await save(page);
     expect(saved === content, `the paste changed the file: ${JSON.stringify(saved)}`);
+  }),
+
+  check('images: text copied with a picture of itself pastes as text', async ({ page, server }) => {
+    const frame = await openFile(page, server, { content: 'Start.\n' });
+    await frame.locator('.ProseMirror p').first().click();
+    await page.keyboard.press('End');
+    await frame.evaluate(() => {
+      const data = new DataTransfer();
+      data.items.add(new File([new Uint8Array([137, 80, 78, 71])], 'clip.png', { type: 'image/png' }));
+      data.setData('text/plain', ' Pasted words.');
+      document.querySelector('.ProseMirror').dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+    });
+    await settle(page);
+    const saved = await save(page);
+    expect(saved === 'Start. Pasted words.\n', `saved ${JSON.stringify(saved)}`);
+    expect((await hostState(page)).toasts.length === 0, 'a message was shown for a plain text paste');
+  }),
+
+  check('images: a pasted picture path becomes a link to it from the document', async ({ page, server }) => {
+    const frame = await openFile(page, server, { path: 'docs/guide.md', content: 'Start.\n', files: { 'assets/logo.svg': '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>' } });
+    await frame.locator('.ProseMirror p').first().click();
+    await page.keyboard.press('End');
+    await frame.evaluate(() => {
+      const data = new DataTransfer();
+      data.setData('text/plain', 'D:\\Projects\\sample\\assets\\logo.svg');
+      document.querySelector('.ProseMirror').dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+    });
+    await settle(page);
+    const saved = await save(page);
+    expect(saved.includes('![logo](../assets/logo.svg)'), `saved ${JSON.stringify(saved)}`);
   }),
 
   // --- Opening: where the document starts ------------------------------------------------

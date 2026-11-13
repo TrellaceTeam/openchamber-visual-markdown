@@ -1,33 +1,28 @@
-// Scratch: open a corpus file, show the document's top-level blocks, make the "Zq" edit and
-// print what a save would write.
-// Usage: node test/harness/debug.mjs <corpus-file-name> [noedit]
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { hostState, openFile, packageRoot, save, withHarness } from './lib.mjs';
+// Scratch: capture the editor's "reference for AI" message for a document, to replay in a unit test.
+// Usage: node test/harness/debug.mjs <out.json>
+import { writeFileSync } from 'node:fs';
+import { hostState, openFile, withHarness } from './lib.mjs';
 
-const name = process.argv[2];
-const edit = process.argv[3] !== 'noedit';
-const content = readFileSync(join(packageRoot, 'test', 'corpus', name), 'utf8').replace(/\r\n/g, '\n');
+const out = process.argv[2];
 
 await withHarness(async ({ server, newHost }) => {
-  const { page, problems } = await newHost();
-  const frame = await openFile(page, server, { path: `docs/${name}`, content });
-  await page.waitForTimeout(600);
-  const blocks = await frame.evaluate(() => {
-    const editor = document.querySelector('.ProseMirror').editor;
-    return editor.getJSON().content.map((node) => `${node.type}${node.content ? '' : ' (empty)'}`);
+  const { page } = await newHost();
+  const content = '---\ntitle: Plan\n---\n\n# Plan\n\nFirst paragraph.\n\n- item one\n- item two\n\nLast paragraph here.\n';
+  const frame = await openFile(page, server, { path: 'docs/plan.md', content });
+  await frame.locator('.ProseMirror li').nth(1).click();
+  await frame.evaluate(() => {
+    const api = window.acquireVsCodeApi();
+    const original = api.postMessage;
+    window.__captured = [];
+    api.postMessage = (message) => {
+      if (message && message.type === 'copyReferenceForAi') window.__captured.push(JSON.parse(JSON.stringify(message)));
+      return original(message);
+    };
   });
-  console.log('blocks:', blocks.join(' | '));
-  if (edit) {
-    await frame.locator('.ProseMirror > :is(h1, h2, h3, h4, h5, h6, p)').first().click();
-    await page.keyboard.press('Home');
-    await page.keyboard.type('Zq');
-    await page.waitForTimeout(900);
-  }
-  const saved = await save(page);
-  console.log('--- original');
-  console.log(JSON.stringify(content));
-  console.log('--- saved');
-  console.log(JSON.stringify(saved));
-  console.log('dirty:', (await hostState(page)).dirty, 'problems:', problems.filter((p) => !/404/.test(p)).slice(0, 3));
+  await frame.locator('.formatting-toolbar .copy-reference-button').click();
+  await page.waitForTimeout(700);
+  const captured = await frame.evaluate(() => window.__captured);
+  writeFileSync(out, JSON.stringify({ content, message: captured[0] }, null, 1));
+  console.log('captured', captured.length, 'composed', JSON.stringify((await hostState(page)).composed));
+  console.log(JSON.stringify(captured[0]).slice(0, 1800));
 });

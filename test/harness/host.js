@@ -32,6 +32,7 @@
     clipboard: [],
     composed: [],
     storage: {},
+    storageOps: [],
     errors: [],
     log: [],
   };
@@ -135,23 +136,24 @@
         if (badPath(payload.path)) return refuse(id, 'BAD_PATH', 'Bad path.');
         const content = state.files[payload.path];
         if (content !== undefined) return answer(id, { kind: 'file', size: content.length, mtime: 0 });
-        return answer(id, listDir(payload.path).length > 0 ? { kind: 'directory', size: 0, mtime: 0 } : { kind: 'missing' });
+        return answer(id, { kind: listDir(payload.path).length > 0 ? 'directory' : 'missing', size: 0, mtime: 0 });
       }
       case 'file-list':
         if (badPath(payload.path)) return refuse(id, 'BAD_PATH', 'Bad path.');
         return answer(id, { entries: listDir(payload.path) });
       case 'storage': {
         const store = state.storage;
-        if (payload.op === 'get') return answer(id, payload.key in store ? { op: 'get', found: true, value: store[payload.key] } : { op: 'get', found: false });
+        state.storageOps.push(`${payload.op}:${payload.key ?? ''}:${payload.scope ?? 'instance'}`);
+        if (payload.op === 'get') return answer(id, payload.key in store ? { storage: true, op: 'get', found: true, value: store[payload.key] } : { storage: true, op: 'get', found: false });
         if (payload.op === 'set') {
           store[payload.key] = payload.value;
-          return answer(id, { op: 'set' });
+          return answer(id, { storage: true, op: 'set' });
         }
         if (payload.op === 'delete') {
           delete store[payload.key];
-          return answer(id, { op: 'delete' });
+          return answer(id, { storage: true, op: 'delete' });
         }
-        return answer(id, { op: 'keys', keys: Object.keys(store) });
+        return answer(id, { storage: true, op: 'keys', keys: Object.keys(store).sort() });
       }
       default:
         if (id !== undefined) refuse(id, 'UNSUPPORTED', `The test host does not handle ${message.type}.`);

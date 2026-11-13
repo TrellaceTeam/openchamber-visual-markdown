@@ -1,3 +1,4 @@
+"use strict";
 (() => {
   var __defProp = Object.defineProperty;
   var __export = (target, all) => {
@@ -9158,8 +9159,26 @@ ${GUEST_UI_LOOK_CSS}`;
   }
 
   // src/shim/stubs/crypto.ts
+  var TextFingerprint = class {
+    a = 2166136261;
+    b = 16777619;
+    length = 0;
+    update(data) {
+      const at = typeof data === "string" ? (index) => data.charCodeAt(index) : (index) => data[index];
+      for (let index = 0; index < data.length; index += 1) {
+        const value = at(index);
+        this.a = Math.imul(this.a ^ value, 16777619) >>> 0;
+        this.b = Math.imul(this.b, 31) + value + (this.a >>> 7) >>> 0;
+      }
+      this.length += data.length;
+      return this;
+    }
+    digest() {
+      return [this.a, this.b, this.length >>> 0].map((part) => part.toString(16).padStart(8, "0")).join("");
+    }
+  };
   function createHash() {
-    throw new Error("Hashing is not available in the editor page.");
+    return new TextFingerprint();
   }
 
   // .upstream/markdown-for-humans/src/editor/feedbackSnapshotService.ts
@@ -9666,6 +9685,14 @@ ${GUEST_UI_LOOK_CSS}`;
   var FLUSH_TIMEOUT_MS = 3e3;
   var SETTLE_IDLE_MS = 1200;
   var VIEW_STATE_WAIT_MS = 700;
+  var ADD_TO_CHAT = {
+    en: ["Add to chat", "Add to chat as {0}"],
+    es: ["A\xF1adir al chat", "A\xF1adir al chat como {0}"],
+    ja: ["\u30C1\u30E3\u30C3\u30C8\u306B\u8FFD\u52A0", "\u30C1\u30E3\u30C3\u30C8\u306B\u8FFD\u52A0: {0}"],
+    "pt-br": ["Adicionar ao chat", "Adicionar ao chat como {0}"],
+    ru: ["\u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C \u0432 \u0447\u0430\u0442", "\u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C \u0432 \u0447\u0430\u0442 \u043A\u0430\u043A {0}"],
+    "zh-cn": ["\u6DFB\u52A0\u5230\u804A\u5929", "\u6DFB\u52A0\u5230\u804A\u5929\uFF1A{0}"]
+  };
   var TRANSLATIONS = { es: "es", ja: "ja", "pt-br": "pt-br", pt: "pt-br", ru: "ru", "zh-cn": "zh-cn", zh: "zh-cn" };
   var host = connectHost();
   window.addEventListener("message", (event) => {
@@ -9745,14 +9772,19 @@ ${GUEST_UI_LOOK_CSS}`;
   var loadTranslations = async (locale) => {
     const key = locale.toLowerCase();
     const name = TRANSLATIONS[key] ?? TRANSLATIONS[key.split("-")[0]];
-    if (!name) return;
-    try {
-      const response = await fetch(`l10n/${name}.json`);
-      if (!response.ok) return;
-      document.body.setAttribute("data-l10n-bundle", await response.text());
-    } catch (error2) {
-      log("translations not loaded", error2);
+    let bundle = {};
+    if (name) {
+      try {
+        const response = await fetch(`l10n/${name}.json`);
+        if (response.ok) bundle = await response.json();
+      } catch (error2) {
+        log("translations not loaded", error2);
+      }
     }
+    const [label, tooltip] = ADD_TO_CHAT[name ?? "en"] ?? ADD_TO_CHAT.en;
+    bundle["Copy AI reference"] = label;
+    bundle["Copy reference for AI ({0})/Toolbar tooltip. {0} is an example of the copied text, such as @file#L10-14"] = tooltip;
+    document.body.setAttribute("data-l10n-bundle", JSON.stringify(bundle));
   };
   var reportChange = () => {
     if (!doc) return;
@@ -9764,11 +9796,11 @@ ${GUEST_UI_LOOK_CSS}`;
       if (doc?.settle()) reportChange();
     }, SETTLE_IDLE_MS);
   };
-  var editorInstance = () => {
+  function editorInstance() {
     const element = document.querySelector(".ProseMirror");
     const instance = element?.editor;
     return instance && typeof instance.setEditable === "function" ? instance : null;
-  };
+  }
   var applyReadOnly = () => {
     const readOnly = file?.readOnly === true;
     document.body.classList.toggle("vm-readonly", readOnly);
@@ -9813,12 +9845,6 @@ ${GUEST_UI_LOOK_CSS}`;
     const toolbar = document.querySelector(".formatting-toolbar");
     if (toolbarAdapted || !toolbar) return;
     toolbarAdapted = true;
-    const reference2 = toolbar.querySelector(".copy-reference-button");
-    if (reference2) {
-      const label = "Add to chat as @file#L10-14";
-      reference2.title = label;
-      reference2.setAttribute("aria-label", label);
-    }
     const measure = () => document.documentElement.style.setProperty("--vm-toolbar-height", `${toolbar.offsetHeight}px`);
     measure();
     new ResizeObserver(measure).observe(toolbar);
@@ -9880,6 +9906,67 @@ ${GUEST_UI_LOOK_CSS}`;
     const path = resolveProjectPath(folder(), target) ?? cleanTarget(target);
     void host.writeClipboard(path).then(() => toast("info", `Copied path: ${path}`)).catch(() => void 0);
   };
+  var NO_PICTURE_FILES = "Adding a picture file is not supported yet. Put the file in the project, then paste its path.";
+  var insertImageByPath = (message) => {
+    const source = String(message.sourcePath ?? "").trim();
+    if (source === "") return;
+    let target;
+    if (/^https?:\/\//i.test(source)) {
+      target = source;
+    } else {
+      const path = source.replace(/\\/g, "/").replace(/^\/(?=[a-zA-Z]:\/)/, "");
+      if (/^([a-zA-Z]:)?\//.test(path)) {
+        const inProject = documentFolder(path, context?.directory ?? null);
+        const from = folder();
+        target = inProject === null || from === null ? null : relativeFrom(from, `${inProject === "" ? "" : `${inProject}/`}${path.slice(path.lastIndexOf("/") + 1)}`);
+      } else {
+        target = path;
+      }
+    }
+    if (target === null) {
+      toast("info", "That picture is outside this project. Copy it into the project, then paste its path.");
+      return;
+    }
+    const name = cleanTarget(target).split("/").pop() ?? "";
+    toEditor({ type: "insertWorkspaceImage", relativePath: target, altText: name.replace(/\.[a-z0-9]+$/i, ""), insertPosition: message.insertPosition });
+  };
+  var hasPictureFile = (data) => data !== null && Array.from(data.files ?? []).some((item) => item.type.startsWith("image/"));
+  var namesPicture = (data) => {
+    const firstLine = (data.getData("text/uri-list") || data.getData("text/plain")).trim().split(/\r?\n/).find(Boolean) ?? "";
+    return /\.(png|jpe?g|gif|webp|svg|bmp|ico)$/i.test(firstLine);
+  };
+  document.addEventListener(
+    "paste",
+    (event) => {
+      const data = event.clipboardData;
+      const view = editorInstance()?.view;
+      if (!data || !view || !view.dom.contains(event.target) || !hasPictureFile(data) || namesPicture(data)) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (file?.readOnly === true) return;
+      const html = data.getData("text/html");
+      const text2 = data.getData("text/plain");
+      if (html.trim() !== "") view.pasteHTML(html);
+      else if (text2.trim() !== "") view.pasteText(text2);
+      else toast("info", NO_PICTURE_FILES);
+    },
+    true
+  );
+  for (const type of ["dragover", "drop"]) {
+    document.addEventListener(
+      type,
+      (event) => {
+        const data = event.dataTransfer;
+        if (!data || !Array.from(data.types ?? []).includes("Files") || namesPicture(data)) return;
+        event.stopImmediatePropagation();
+        if (type === "drop") {
+          event.preventDefault();
+          if (file?.readOnly !== true) toast("info", NO_PICTURE_FILES);
+        }
+      },
+      true
+    );
+  }
   var targetExists = async (target) => {
     const path = resolveProjectPath(folder(), target);
     if (path === null) return true;
@@ -9942,6 +10029,9 @@ ${GUEST_UI_LOOK_CSS}`;
         void images.resolve(String(message.relativePath ?? "")).then((webviewUri) => {
           toEditor({ type: "imageUriResolved", requestId: message.requestId, webviewUri });
         });
+        return;
+      case "handleWorkspaceImage":
+        insertImageByPath(message);
         return;
       case "saveImage":
         toEditor({

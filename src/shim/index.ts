@@ -14,7 +14,7 @@ import { applyHostReady } from '@openchamber/sdk/ui';
 import type { BlankLineMode } from '@upstream/shared/blankLinePolicy';
 import { resolveTypographySettings } from '@upstream/shared/typographySettings';
 import { DocumentHost, versionOf } from './documentHost';
-import { FileIndex, type FileFilters } from './fileIndex';
+import { FileIndex, relativeFrom, type FileFilters } from './fileIndex';
 import { createImageResolver } from './images';
 import { mermaidThemeFor } from './mermaidTheme';
 import { cleanTarget, documentFolder, hasScheme, resolveProjectPath } from './paths';
@@ -43,6 +43,15 @@ const FLUSH_TIMEOUT_MS = 3000;
 const SETTLE_IDLE_MS = 1200;
 /** How long opening a file waits for its saved scroll position before starting at the top. */
 const VIEW_STATE_WAIT_MS = 700;
+/** The @ button's name and tooltip, by translation file. {0} is an example such as @file#L10-14. */
+const ADD_TO_CHAT: Readonly<Record<string, readonly [label: string, tooltip: string]>> = {
+  en: ['Add to chat', 'Add to chat as {0}'],
+  es: ['Añadir al chat', 'Añadir al chat como {0}'],
+  ja: ['チャットに追加', 'チャットに追加: {0}'],
+  'pt-br': ['Adicionar ao chat', 'Adicionar ao chat como {0}'],
+  ru: ['Добавить в чат', 'Добавить в чат как {0}'],
+  'zh-cn': ['添加到聊天', '添加到聊天：{0}'],
+};
 /** Languages upstream ships translations for, by OpenChamber locale. */
 const TRANSLATIONS: Readonly<Record<string, string>> = { es: 'es', ja: 'ja', 'pt-br': 'pt-br', pt: 'pt-br', ru: 'ru', 'zh-cn': 'zh-cn', zh: 'zh-cn' };
 
@@ -156,15 +165,21 @@ const applyTheme = (ready: HostReadyContext): void => {
 const loadTranslations = async (locale: string): Promise<void> => {
   const key = locale.toLowerCase();
   const name = TRANSLATIONS[key] ?? TRANSLATIONS[key.split('-')[0]];
-  if (!name) return;
-  try {
-    const response = await fetch(`l10n/${name}.json`);
-    if (!response.ok) return;
-    // The editor reads its translations from this attribute when it first needs a string.
-    document.body.setAttribute('data-l10n-bundle', await response.text());
-  } catch (error) {
-    log('translations not loaded', error);
+  let bundle: Record<string, string> = {};
+  if (name) {
+    try {
+      const response = await fetch(`l10n/${name}.json`);
+      if (response.ok) bundle = (await response.json()) as Record<string, string>;
+    } catch (error) {
+      log('translations not loaded', error);
+    }
   }
+  // The @ button copies a reference in VS Code. Here it adds the reference to the chat.
+  const [label, tooltip] = ADD_TO_CHAT[name ?? 'en'] ?? ADD_TO_CHAT.en;
+  bundle['Copy AI reference'] = label;
+  bundle['Copy reference for AI ({0})/Toolbar tooltip. {0} is an example of the copied text, such as @file#L10-14'] = tooltip;
+  // The editor reads its translations from this attribute when it first needs a string.
+  document.body.setAttribute('data-l10n-bundle', JSON.stringify(bundle));
 };
 
 // ---------------------------------------------------------------------------------------
@@ -183,11 +198,19 @@ const scheduleSettle = (): void => {
   }, SETTLE_IDLE_MS);
 };
 
-const editorInstance = (): { setEditable: (editable: boolean) => void; isEditable: boolean } | null => {
+/** The parts of the TipTap editor this file uses. */
+interface EditorHandle {
+  readonly isEditable: boolean;
+  setEditable: (editable: boolean) => void;
+  readonly view: { readonly dom: HTMLElement; pasteHTML: (html: string) => boolean; pasteText: (text: string) => boolean };
+}
+
+/** The editor, once it exists. TipTap hangs it on its own element. */
+function editorInstance(): EditorHandle | null {
   const element = document.querySelector('.ProseMirror') as (HTMLElement & { editor?: unknown }) | null;
   const instance = element?.editor as { setEditable?: unknown } | undefined;
-  return instance && typeof instance.setEditable === 'function' ? (instance as never) : null;
-};
+  return instance && typeof instance.setEditable === 'function' ? (instance as unknown as EditorHandle) : null;
+}
 
 const applyReadOnly = (): void => {
   const readOnly = file?.readOnly === true;
@@ -232,19 +255,12 @@ const sendUpdate = (force: boolean): void => {
   showNotice(null);
 };
 
-/** Name the editor's buttons for what they do in OpenChamber, and tell the page how tall the toolbar is. */
+/** Tell the page how tall the toolbar is. It wraps onto more rows in a narrow pane. */
 let toolbarAdapted = false;
 function adaptToolbar(): void {
   const toolbar = document.querySelector<HTMLElement>('.formatting-toolbar');
   if (toolbarAdapted || !toolbar) return;
   toolbarAdapted = true;
-
-  const reference = toolbar.querySelector<HTMLElement>('.copy-reference-button');
-  if (reference) {
-    const label = 'Add to chat as @file#L10-14';
-    reference.title = label;
-    reference.setAttribute('aria-label', label);
-  }
 
   const measure = (): void => document.documentElement.style.setProperty('--vm-toolbar-height', `${toolbar.offsetHeight}px`);
   measure();
@@ -325,6 +341,83 @@ const copyFilePath = (target: string): void => {
     .catch(() => undefined);
 };
 
+const NO_PICTURE_FILES = 'Adding a picture file is not supported yet. Put the file in the project, then paste its path.';
+
+/**
+ * The person pasted or dropped the path or web address of a picture. Link to it from where
+ * the document is, the way it would be written by hand.
+ */
+const insertImageByPath = (message: EditorMessage): void => {
+  const source = String(message.sourcePath ?? '').trim();
+  if (source === '') return;
+  let target: string | null;
+  if (/^https?:\/\//i.test(source)) {
+    target = source;
+  } else {
+    // A file:// address on Windows arrives as /D:/folder/file.png.
+    const path = source.replace(/\\/g, '/').replace(/^\/(?=[a-zA-Z]:\/)/, '');
+    if (/^([a-zA-Z]:)?\//.test(path)) {
+      const inProject = documentFolder(path, context?.directory ?? null);
+      const from = folder();
+      target = inProject === null || from === null ? null : relativeFrom(from, `${inProject === '' ? '' : `${inProject}/`}${path.slice(path.lastIndexOf('/') + 1)}`);
+    } else {
+      target = path;
+    }
+  }
+  if (target === null) {
+    toast('info', 'That picture is outside this project. Copy it into the project, then paste its path.');
+    return;
+  }
+  const name = cleanTarget(target).split('/').pop() ?? '';
+  toEditor({ type: 'insertWorkspaceImage', relativePath: target, altText: name.replace(/\.[a-z0-9]+$/i, ''), insertPosition: message.insertPosition });
+};
+
+const hasPictureFile = (data: DataTransfer | null): boolean => data !== null && Array.from(data.files ?? []).some((item) => item.type.startsWith('image/'));
+
+/** The first line of the text being pasted or dropped, when it names a picture. The editor links to it. */
+const namesPicture = (data: DataTransfer): boolean => {
+  const firstLine = (data.getData('text/uri-list') || data.getData('text/plain')).trim().split(/\r?\n/).find(Boolean) ?? '';
+  return /\.(png|jpe?g|gif|webp|svg|bmp|ico)$/i.test(firstLine);
+};
+
+// The editor would ask where to save a pasted or dropped picture and then fail, because this
+// page cannot write picture files. Step in first. Copied text often carries a picture of
+// itself as well (from a word processor, say): that pastes as its text.
+document.addEventListener(
+  'paste',
+  (event) => {
+    const data = event.clipboardData;
+    const view = editorInstance()?.view;
+    if (!data || !view || !view.dom.contains(event.target as Node) || !hasPictureFile(data) || namesPicture(data)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (file?.readOnly === true) return;
+    const html = data.getData('text/html');
+    const text = data.getData('text/plain');
+    if (html.trim() !== '') view.pasteHTML(html);
+    else if (text.trim() !== '') view.pasteText(text);
+    else toast('info', NO_PICTURE_FILES);
+  },
+  true,
+);
+
+for (const type of ['dragover', 'drop'] as const) {
+  document.addEventListener(
+    type,
+    (event) => {
+      const data = event.dataTransfer;
+      if (!data || !Array.from(data.types ?? []).includes('Files') || namesPicture(data)) return;
+      // Not calling preventDefault on dragover shows the "cannot drop here" cursor.
+      event.stopImmediatePropagation();
+      if (type === 'drop') {
+        event.preventDefault();
+        if (file?.readOnly !== true) toast('info', NO_PICTURE_FILES);
+      }
+    },
+    true,
+  );
+}
+
 /** Whether a link or image target written in the document points at something that exists. */
 const targetExists = async (target: string): Promise<boolean> => {
   const path = resolveProjectPath(folder(), target);
@@ -393,6 +486,9 @@ const fromEditor = (message: EditorMessage): void => {
       void images.resolve(String(message.relativePath ?? '')).then((webviewUri) => {
         toEditor({ type: 'imageUriResolved', requestId: message.requestId, webviewUri });
       });
+      return;
+    case 'handleWorkspaceImage':
+      insertImageByPath(message);
       return;
     case 'saveImage':
       // Image files cannot be written from here yet. Tell the editor at once, so a save
