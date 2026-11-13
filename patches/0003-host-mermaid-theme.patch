@@ -1,0 +1,117 @@
+diff --git a/src/webview/extensions/mermaid.ts b/src/webview/extensions/mermaid.ts
+index 98e6a3a..64020b2 100644
+--- a/src/webview/extensions/mermaid.ts
++++ b/src/webview/extensions/mermaid.ts
+@@ -7,6 +7,7 @@
+ import { Node, mergeAttributes } from '@tiptap/core';
+ import mermaid from 'mermaid';
+ import * as l10n from '../l10n';
++import { mermaidThemeConfig, mermaidThemeKey } from '../utils/hostMermaidTheme';
+ 
+ const MERMAID_RENDER_STATE_ATTRIBUTE = 'data-md4h-mermaid-state';
+ type MermaidRenderState = 'pending' | 'ready' | 'error';
+@@ -41,10 +42,9 @@ function isDarkMode(): boolean {
+  * Initialize mermaid with theme based on VS Code theme
+  */
+ function initializeMermaid() {
+-  const theme = isDarkMode() ? 'dark' : 'default';
+   mermaid.initialize({
+     startOnLoad: false,
+-    theme,
++    ...mermaidThemeConfig(isDarkMode()),
+     securityLevel: 'strict', // Safer for VS Code webview
+     fontFamily: 'inherit',
+   });
+@@ -60,7 +60,7 @@ initializeMermaid();
+  */
+ const themeRerenderers = new Set<() => void>();
+ let themeObserver: MutationObserver | null = null;
+-let lastDarkMode = false;
++let lastThemeKey = '';
+ 
+ /**
+  * Watch the body class, which VS Code's webview host rewrites together with
+@@ -70,11 +70,11 @@ let lastDarkMode = false;
+ function registerThemeRerender(rerender: () => void): () => void {
+   themeRerenderers.add(rerender);
+   if (!themeObserver) {
+-    lastDarkMode = isDarkMode();
++    lastThemeKey = mermaidThemeKey(isDarkMode());
+     themeObserver = new MutationObserver(() => {
+-      const dark = isDarkMode();
+-      if (dark === lastDarkMode) return;
+-      lastDarkMode = dark;
++      const key = mermaidThemeKey(isDarkMode());
++      if (key === lastThemeKey) return;
++      lastThemeKey = key;
+       themeRerenderers.forEach(callback => callback());
+     });
+     themeObserver.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+@@ -216,10 +216,9 @@ export const Mermaid = Node.create({
+         }
+ 
+         try {
+-          const theme = isDarkMode() ? 'dark' : 'default';
+           mermaid.initialize({
+             startOnLoad: false,
+-            theme,
++            ...mermaidThemeConfig(isDarkMode()),
+             securityLevel: 'strict',
+             fontFamily: 'inherit',
+           });
+diff --git a/src/webview/utils/hostMermaidTheme.ts b/src/webview/utils/hostMermaidTheme.ts
+new file mode 100644
+index 0000000..05d1f4a
+--- /dev/null
++++ b/src/webview/utils/hostMermaidTheme.ts
+@@ -0,0 +1,50 @@
++/**
++ * Let the page that hosts the editor choose Mermaid's colours.
++ *
++ * Added by Visual Markdown (https://github.com/TrellaceTeam/openchamber-visual-markdown).
++ *
++ * Mermaid bakes its theme into each SVG. The editor picks Mermaid's stock `default` or
++ * `dark` theme from the background colour. A host with its own palette can set
++ * `window.visualMarkdownMermaidTheme` to return Mermaid theme settings instead, so
++ * diagrams match the rest of the page. Without that function nothing changes.
++ */
++
++export interface HostMermaidTheme {
++  /** A Mermaid theme name, usually `base` when `themeVariables` are given. */
++  readonly theme: string;
++  readonly themeVariables?: Readonly<Record<string, string | boolean>>;
++  /** Changes whenever the colours do, so mounted diagrams are drawn again. */
++  readonly key?: string;
++}
++
++type Provider = (dark: boolean) => HostMermaidTheme | null | undefined;
++
++function supplied(dark: boolean): HostMermaidTheme | null {
++  const provider = (window as unknown as { visualMarkdownMermaidTheme?: Provider })
++    .visualMarkdownMermaidTheme;
++  if (typeof provider !== 'function') return null;
++  try {
++    const theme = provider(dark);
++    return theme && typeof theme.theme === 'string' ? theme : null;
++  } catch (error) {
++    console.warn('[MD4H] Host Mermaid theme failed:', error);
++    return null;
++  }
++}
++
++/** The `theme` and `themeVariables` to pass to `mermaid.initialize`. */
++export function mermaidThemeConfig(dark: boolean): {
++  theme: string;
++  themeVariables?: Record<string, string | boolean>;
++} {
++  const host = supplied(dark);
++  if (!host) return { theme: dark ? 'dark' : 'default' };
++  return host.themeVariables
++    ? { theme: host.theme, themeVariables: { ...host.themeVariables } }
++    : { theme: host.theme };
++}
++
++/** A string that differs whenever a re-render would look different. */
++export function mermaidThemeKey(dark: boolean): string {
++  return `${dark ? 'dark' : 'light'}:${supplied(dark)?.key ?? ''}`;
++}

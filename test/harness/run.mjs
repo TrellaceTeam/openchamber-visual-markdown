@@ -7,6 +7,7 @@
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { handoff, hostState, openFile, outDir, packageRoot, save, withHarness } from './lib.mjs';
+import { styleCases } from './style-cases.mjs';
 
 const filter = process.argv[2] ?? '';
 const corpusDir = join(packageRoot, 'test', 'corpus');
@@ -65,6 +66,32 @@ const typeAtEndOf = async (page, frame, selector, text) => {
   await page.keyboard.type(text);
 };
 
+/** Type `text` right before the first place `needle` appears in the document. */
+const insertBefore = (frame, needle, text) =>
+  frame.evaluate(
+    ([word, typed]) => {
+      const editor = document.querySelector('.ProseMirror').editor;
+      let at = -1;
+      editor.state.doc.descendants((node, pos) => {
+        if (at < 0 && node.isText && node.text.includes(word)) at = pos + node.text.indexOf(word);
+        return at < 0;
+      });
+      if (at < 0) return false;
+      if (typed === '') editor.chain().focus().setTextSelection(at).run();
+      else editor.chain().focus().insertContentAt(at, typed).run();
+      return true;
+    },
+    [needle, text],
+  );
+
+/** A file's text in the form the editor loads it: front matter shown as a code block. */
+const wrapForEditor = (text) => {
+  const match = /^---[^\S\n]*\n([\s\S]*?)\n---[^\S\n]*\n?/.exec(text);
+  if (!match) return text;
+  const body = text.slice(match[0].length).replace(/^\n/, '');
+  return ['```yaml', match[0].replace(/\s+$/, ''), '```', ...(body ? ['', body] : [])].join('\n');
+};
+
 /** Wait until the host has been told about a change (the editor sends edits on a short delay). */
 const settle = (page, ms = 900) => page.waitForTimeout(ms);
 
@@ -106,6 +133,97 @@ const checks = [
         expect(region.after.join('\n').includes('Zq'), `the changed lines do not hold the typed text ${detail}`);
       }),
     ),
+
+  // --- An edit inside a block must keep the author's Markdown style -------------------------
+  ...styleCases.map(({ name, needle, content, expected }) =>
+    check(`style: ${name} keeps its style when a word is typed`, async ({ page, server }) => {
+      const frame = await openFile(page, server, { path: 'docs/style.md', content });
+      await settle(page, 300);
+      expect(await insertBefore(frame, needle, 'Zq'), `the word ${JSON.stringify(needle)} is not in the document`);
+      await settle(page);
+      const saved = await save(page);
+      const wanted = expected ?? content.replace(needle, `Zq${needle}`);
+      expect(saved === wanted, `saved text differs: ${firstDifference(wanted, saved)}`);
+      // And the saved text must open as the very document that is on screen.
+      expect(await frame.evaluate((text) => window.visualMarkdownEditor.matchesDocument(text), wrapForEditor(saved)), 'the saved text does not load as the document on screen');
+    }),
+  ),
+
+  check('style: a new item in a star list is written with a star', async ({ page, server }) => {
+    const content = '* first item\n* second item\n\nEnd.\n';
+    const frame = await openFile(page, server, { content });
+    await frame.locator('.ProseMirror li').nth(1).click();
+    await page.keyboard.press('End');
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('third item');
+    await settle(page);
+    const saved = await save(page);
+    expect(saved === '* first item\n* second item\n* third item\n\nEnd.\n', `saved ${JSON.stringify(saved)}`);
+  }),
+
+  check('style: deleting a list item leaves the others as written', async ({ page, server }) => {
+    const content = '1) first item\n2) second item\n3) third item\n';
+    const frame = await openFile(page, server, { content });
+    await frame.evaluate(() => {
+      const editor = document.querySelector('.ProseMirror').editor;
+      let range = null;
+      editor.state.doc.descendants((node, pos) => {
+        if (!range && node.type.name === 'listItem' && node.textContent === 'second item') range = { from: pos, to: pos + node.nodeSize };
+        return !range;
+      });
+      editor.chain().focus().deleteRange(range).run();
+    });
+    await settle(page);
+    const saved = await save(page);
+    expect(saved === '1) first item\n2) third item\n', `saved ${JSON.stringify(saved)}`);
+  }),
+
+  check('style: a line break added with Shift+Enter is hard, the wrapped lines stay soft', async ({ page, server }) => {
+    const content = 'First line of a wrapped paragraph\nsecond line of it\nthird line.\n';
+    const frame = await openFile(page, server, { content });
+    expect(await insertBefore(frame, 'of it', ''), 'text not found');
+    await frame.evaluate(() => document.querySelector('.ProseMirror').editor.commands.setHardBreak());
+    await settle(page);
+    const saved = await save(page);
+    // The space that was before "of it" is still there, followed by the two that make the break.
+    expect(saved === 'First line of a wrapped paragraph\nsecond line   \nof it\nthird line.\n', `saved ${JSON.stringify(saved)}`);
+  }),
+
+  check('style: bold applied in a wrapped paragraph changes only those words', async ({ page, server }) => {
+    const content = 'A paragraph wrapped by hand with _old emphasis_\nand a second line that gets bold words\nand a third.\n';
+    const frame = await openFile(page, server, { content });
+    await frame.evaluate(() => {
+      const editor = document.querySelector('.ProseMirror').editor;
+      let at = -1;
+      editor.state.doc.descendants((node, pos) => {
+        if (at < 0 && node.isText && node.text.includes('bold words')) at = pos + node.text.indexOf('bold words');
+        return at < 0;
+      });
+      editor.chain().focus().setTextSelection({ from: at, to: at + 'bold words'.length }).toggleBold().run();
+    });
+    await settle(page);
+    const saved = await save(page);
+    expect(saved === 'A paragraph wrapped by hand with _old emphasis_\nand a second line that gets **bold words**\nand a third.\n', `saved ${JSON.stringify(saved)}`);
+  }),
+
+  check('style: edits in two blocks both keep their style, and undo leaves the file clean', async ({ page, server }) => {
+    const content = '* one\n* two\n\nMiddle paragraph\nwrapped by hand.\n\n1) alpha\n2) beta\n';
+    const frame = await openFile(page, server, { content });
+    await insertBefore(frame, 'two', 'Zq');
+    await settle(page, 500);
+    await insertBefore(frame, 'beta', 'Zq');
+    await settle(page);
+    const saved = await save(page);
+    expect(saved === '* one\n* Zqtwo\n\nMiddle paragraph\nwrapped by hand.\n\n1) alpha\n2) Zqbeta\n', `saved ${JSON.stringify(saved)}`);
+    // After the save the same blocks are edited again.
+    await insertBefore(frame, 'one', 'Zq');
+    await settle(page);
+    const again = await save(page);
+    expect(again === '* Zqone\n* Zqtwo\n\nMiddle paragraph\nwrapped by hand.\n\n1) alpha\n2) Zqbeta\n', `second save ${JSON.stringify(again)}`);
+    for (let index = 0; index < 6; index += 1) await page.keyboard.press('Control+z');
+    await settle(page, 1800);
+    expect((await handoff(page)) === content, `after undo the text is ${JSON.stringify(await handoff(page))}`);
+  }),
 
   // --- Editing ---------------------------------------------------------------------------
   check('edit: typing marks the file changed, and a save writes only that line', async ({ page, server }) => {
@@ -245,6 +363,142 @@ const checks = [
     }, null, { timeout: 10000 });
     await frame.waitForSelector('.image-load-failed', { timeout: 10000 });
     expect((await hostState(page)).dirty === false, 'images marked the file changed');
+    const label = await frame.evaluate(() => {
+      const element = document.querySelector('.image-load-error:not([hidden])');
+      return element ? { alt: element.dataset.alt, src: element.dataset.src, shown: getComputedStyle(element, '::after').content } : null;
+    });
+    expect(label?.alt === 'shot' && label?.src === './shot.png', `the placeholder does not carry the image's alt text and path: ${JSON.stringify(label)}`);
+  }),
+
+  check('images: pasting a picture changes nothing and says why', async ({ page, server }) => {
+    const content = '# Paste\n\nText.\n';
+    const frame = await openFile(page, server, { content });
+    await frame.locator('.ProseMirror p').first().click();
+    await frame.evaluate(() => {
+      const bytes = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='), (c) => c.charCodeAt(0));
+      const data = new DataTransfer();
+      data.items.add(new File([bytes], 'pixel.png', { type: 'image/png' }));
+      document.querySelector('.ProseMirror').dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+    });
+    await settle(page, 1500);
+    const state = await hostState(page);
+    expect(state.toasts.some((toast) => /image/i.test(toast.message)), `no message about the image: ${JSON.stringify(state.toasts)}`);
+    const saved = await save(page);
+    expect(saved === content, `the paste changed the file: ${JSON.stringify(saved)}`);
+  }),
+
+  // --- Opening: where the document starts ------------------------------------------------
+  check('place: a new file opens at the top with no formatting button lit', async ({ page, server }) => {
+    const content = `# Top\n\n${'Paragraph.\n\n'.repeat(60)}*The last line is italic.*\n`;
+    const frame = await openFile(page, server, { content });
+    await settle(page, 500);
+    const info = await frame.evaluate(() => {
+      const editor = document.querySelector('.ProseMirror').editor;
+      return {
+        from: editor.state.selection.from,
+        scrollTop: document.scrollingElement.scrollTop,
+        lit: [...document.querySelectorAll('.formatting-toolbar .toolbar-button.active')].filter((button) => getComputedStyle(button).backgroundColor !== 'rgba(0, 0, 0, 0)').length,
+      };
+    });
+    expect(info.from <= 2, `the caret starts at ${info.from}, not at the top`);
+    expect(info.scrollTop === 0, `the page starts scrolled to ${info.scrollTop}`);
+    expect(info.lit === 0, `${info.lit} formatting buttons look pressed before anything is selected`);
+    expect((await hostState(page)).dirty === false, 'opening marked the file changed');
+  }),
+
+  check('place: the scroll position comes back after the app reloads the page', async ({ page, server }) => {
+    const content = `# Long\n\n${Array.from({ length: 120 }, (_, index) => `Paragraph ${index + 1}.`).join('\n\n')}\n`;
+    const frame = await openFile(page, server, { content });
+    await frame.evaluate(() => document.scrollingElement.scrollTo(0, 1800));
+    await settle(page, 1600);
+    const stored = (await hostState(page)).storage;
+    expect(Object.keys(stored).length === 1, `expected one stored entry, got ${JSON.stringify(Object.keys(stored))}`);
+    await page.evaluate((text) => window.harness.externalChange(text), content);
+    const { waitForEditor } = await import('./lib.mjs');
+    const next = await waitForEditor(page);
+    await settle(page, 900);
+    const scrollTop = await next.evaluate(() => document.scrollingElement.scrollTop);
+    expect(Math.abs(scrollTop - 1800) < 40, `scrolled to ${scrollTop} after the reload, expected about 1800`);
+    expect((await hostState(page)).dirty === false, 'restoring the place marked the file changed');
+  }),
+
+  // --- Working with the chat and the project ---------------------------------------------
+  check('chat: the @ button puts the caret\'s lines into the chat box', async ({ page, server }) => {
+    const content = '---\ntitle: Plan\n---\n\n# Plan\n\nFirst paragraph.\n\n- item one\n- item two\n\nLast paragraph here.\n';
+    const frame = await openFile(page, server, { path: 'docs/plan.md', content });
+    await frame.locator('.ProseMirror li').nth(1).click();
+    await frame.locator('.formatting-toolbar .copy-reference-button').click();
+    await settle(page, 700);
+    let state = await hostState(page);
+    expect(state.composed.length === 1, `expected one compose call, got ${JSON.stringify(state.composed)}`);
+    expect(state.composed[0].text === '@docs/plan.md#L10 ' && state.composed[0].mode === 'append', `composed ${JSON.stringify(state.composed[0])}`);
+    expect(state.saves === 0, 'an unchanged file was saved');
+
+    // With unsaved changes the file is saved first, so the lines match what the agent reads.
+    await typeAtEndOf(page, frame, '.ProseMirror > p', ' More.');
+    await frame.locator('.ProseMirror > p').last().click();
+    await frame.locator('.formatting-toolbar .copy-reference-button').click();
+    await settle(page, 900);
+    state = await hostState(page);
+    expect(state.composed.length === 2 && state.composed[1].text === '@docs/plan.md#L12 ', `composed ${JSON.stringify(state.composed)}`);
+    expect(state.saves === 1 && state.disk.includes('First paragraph. More.'), `the changed file was not saved first (saves: ${state.saves})`);
+    const title = await frame.locator('.formatting-toolbar .copy-reference-button').getAttribute('title');
+    expect(/chat/i.test(title ?? ''), `the button is titled ${JSON.stringify(title)}`);
+  }),
+
+  check('links: the link dialog finds project files and writes the path from the document', async ({ page, server }) => {
+    const frame = await openFile(page, server, {
+      path: 'docs/guides/start.md',
+      content: '# Start\n\nSee the setup notes.\n',
+      files: { 'README.md': '# r', 'docs/setup.md': '# s', 'docs/guides/setup-advanced.md': '# a', 'node_modules/pkg/setup.md': '# no', 'src/app.ts': '' },
+    });
+    await frame.locator('.ProseMirror p').first().click();
+    await frame.locator('.toolbar-button[aria-label^="Insert/edit link"]').click();
+    await frame.locator('#link-mode-file').check();
+    await frame.locator('#link-url-input').fill('setup');
+    await frame.waitForSelector('.link-dialog-autocomplete-item-file', { timeout: 8000 });
+    const results = await frame.evaluate(() => [...document.querySelectorAll('.link-dialog-autocomplete-item-file .link-dialog-autocomplete-item-path')].map((element) => element.textContent));
+    expect(JSON.stringify(results) === JSON.stringify(['../setup.md', 'setup-advanced.md']), `results were ${JSON.stringify(results)}`);
+  }),
+
+  check('audit: a link to a missing file is reported, a link to a real one is not', async ({ page, server }) => {
+    const frame = await openFile(page, server, {
+      path: 'docs/index.md',
+      content: '# Index\n\n[Real](guide.md) and [Missing](nowhere.md) and [Web](https://example.com).\n',
+      files: { 'docs/guide.md': '# g' },
+    });
+    await frame.locator('.formatting-toolbar .audit-button').click();
+    await frame.waitForSelector('.audit-overlay-item', { timeout: 8000 });
+    const issues = await frame.evaluate(() => [...document.querySelectorAll('.audit-overlay-item')].map((element) => element.textContent.replace(/\s+/g, ' ').trim()));
+    expect(issues.length === 1 && issues[0].includes('nowhere.md'), `issues were ${JSON.stringify(issues)}`);
+  }),
+
+  check('copy: the copy buttons reach the clipboard through the app', async ({ page, server }) => {
+    const frame = await openFile(page, server, { content: '# Copy\n\n```js\nconst a = 1;\n```\n' });
+    await frame.locator('pre').first().hover();
+    await frame.locator('.code-block-copy-button, pre button, .code-copy-button').first().click();
+    await settle(page, 500);
+    const state = await hostState(page);
+    expect(state.clipboard.some((text) => text.includes('const a = 1;')), `clipboard got ${JSON.stringify(state.clipboard)}`);
+  }),
+
+  check('edit: a task box cannot be ticked in a read-only file', async ({ page, server }) => {
+    const content = '- [ ] open task\n- [x] done task\n';
+    const frame = await openFile(page, server, { content, readOnly: true });
+    await frame.locator('input[type="checkbox"]').first().click({ force: true });
+    await settle(page);
+    expect((await handoff(page)) === content, 'ticking a box changed a read-only file');
+    expect(await frame.locator('#vm-readonly').isVisible(), 'the read-only label is not shown');
+  }),
+
+  check('edit: ticking a task box changes only that line', async ({ page, server }) => {
+    const content = '# Tasks\n\n* [ ] star task\n* [x] done\n\n1. [ ] numbered\n';
+    const frame = await openFile(page, server, { content });
+    await frame.locator('input[type="checkbox"]').first().click();
+    await settle(page);
+    const saved = await save(page);
+    const changed = changedLines(content, saved);
+    expect(changed.length === 1 && changed[0].after === '* [x] star task', `changed lines: ${JSON.stringify(changed)}`);
   }),
 ];
 

@@ -4355,8 +4355,8 @@ ${GUEST_UI_LOOK_CSS}`;
       }
       pos++;
     }
-    let lineText = getLine(state, startLine + 1);
-    let columns = lineText.split("|");
+    let lineText2 = getLine(state, startLine + 1);
+    let columns = lineText2.split("|");
     const aligns = [];
     for (let i = 0; i < columns.length; i++) {
       const t = columns[i].trim();
@@ -4378,14 +4378,14 @@ ${GUEST_UI_LOOK_CSS}`;
         aligns.push("");
       }
     }
-    lineText = getLine(state, startLine).trim();
-    if (lineText.indexOf("|") === -1) {
+    lineText2 = getLine(state, startLine).trim();
+    if (lineText2.indexOf("|") === -1) {
       return false;
     }
     if (state.sCount[startLine] - state.blkIndent >= 4) {
       return false;
     }
-    columns = escapedSplit(lineText);
+    columns = escapedSplit(lineText2);
     if (columns.length && columns[0] === "") columns.shift();
     if (columns.length && columns[columns.length - 1] === "") columns.pop();
     const columnCount = columns.length;
@@ -4433,14 +4433,14 @@ ${GUEST_UI_LOOK_CSS}`;
       if (terminate) {
         break;
       }
-      lineText = getLine(state, nextLine).trim();
-      if (!lineText) {
+      lineText2 = getLine(state, nextLine).trim();
+      if (!lineText2) {
         break;
       }
       if (state.sCount[nextLine] - state.blkIndent >= 4) {
         break;
       }
-      columns = escapedSplit(lineText);
+      columns = escapedSplit(lineText2);
       if (columns.length && columns[0] === "") columns.shift();
       if (columns.length && columns[columns.length - 1] === "") columns.pop();
       autocompletedCells += columnCount - columns.length;
@@ -5233,10 +5233,10 @@ ${GUEST_UI_LOOK_CSS}`;
     if (state.src.charCodeAt(pos) !== 60) {
       return false;
     }
-    let lineText = state.src.slice(pos, max);
+    let lineText2 = state.src.slice(pos, max);
     let i = 0;
     for (; i < HTML_SEQUENCES.length; i++) {
-      if (HTML_SEQUENCES[i][0].test(lineText)) {
+      if (HTML_SEQUENCES[i][0].test(lineText2)) {
         break;
       }
     }
@@ -5248,7 +5248,7 @@ ${GUEST_UI_LOOK_CSS}`;
     }
     let nextLine = startLine + 1;
     const endsOnBlankLine = HTML_SEQUENCES[i][1].test("");
-    if (!HTML_SEQUENCES[i][1].test(lineText)) {
+    if (!HTML_SEQUENCES[i][1].test(lineText2)) {
       for (; nextLine < endLine; nextLine++) {
         if (state.sCount[nextLine] < state.blkIndent) {
           if (endsOnBlankLine || !state.isEmpty(nextLine)) {
@@ -5257,9 +5257,9 @@ ${GUEST_UI_LOOK_CSS}`;
         }
         pos = state.bMarks[nextLine] + state.tShift[nextLine];
         max = state.eMarks[nextLine];
-        lineText = state.src.slice(pos, max);
-        if (HTML_SEQUENCES[i][1].test(lineText)) {
-          if (lineText.length !== 0) {
+        lineText2 = state.src.slice(pos, max);
+        if (HTML_SEQUENCES[i][1].test(lineText2)) {
+          if (lineText2.length !== 0) {
             nextLine++;
           }
           break;
@@ -7561,6 +7561,19 @@ ${GUEST_UI_LOOK_CSS}`;
     breaks: true,
     linkify: false
   });
+  var STANDALONE_IMAGE_LINE_WITH_SPACES_REGEX = /^([ \t]*)!\[([^\]\n]*)\]\(\s*([^\n)]*?\s+[^\n)]*?)\s*\)[ \t]*$/gm;
+  function normalizeSpaceFriendlyImagePaths(markdown) {
+    return markdown.replace(
+      STANDALONE_IMAGE_LINE_WITH_SPACES_REGEX,
+      (line, indent, alt, rawDestination) => {
+        const destination = rawDestination.trim();
+        if (destination.includes('"') || destination.includes("'") || destination.startsWith("<") && destination.endsWith(">")) {
+          return line;
+        }
+        return `${indent}![${alt}](<${destination}>)`;
+      }
+    );
+  }
   function normalizeRenderedHtml(html) {
     const verbatimRegex = /<(pre|code)\b[\s\S]*?<\/\1>/gi;
     const parts = [];
@@ -7660,6 +7673,15 @@ ${GUEST_UI_LOOK_CSS}`;
   function isMarkdownStructurallyEquivalent(a, b) {
     return isEquivalentWhenRendered(a, b, md, false);
   }
+  function isMarkdownRendererEquivalent(a, b, references) {
+    return isEquivalentWhenRendered(
+      normalizeSpaceFriendlyImagePaths(a),
+      normalizeSpaceFriendlyImagePaths(b),
+      rendererMd,
+      true,
+      references
+    );
+  }
   function isEquivalentWhenRendered(a, b, renderer, useRendererNormalization, references) {
     if (a === b) return true;
     try {
@@ -7740,6 +7762,390 @@ ${GUEST_UI_LOOK_CSS}`;
     return frontmatterSection + separator + body;
   }
 
+  // src/shim/diff3.ts
+  function lcsMap(a, b, maxDifference) {
+    const map2 = new Int32Array(a.length).fill(-1);
+    let start = 0;
+    while (start < a.length && start < b.length && a[start] === b[start]) {
+      map2[start] = start;
+      start += 1;
+    }
+    let endA = a.length;
+    let endB = b.length;
+    while (endA > start && endB > start && a[endA - 1] === b[endB - 1]) {
+      endA -= 1;
+      endB -= 1;
+      map2[endA] = endB;
+    }
+    const n = endA - start;
+    const m = endB - start;
+    if (n === 0 || m === 0) return map2;
+    const max = n + m;
+    if (Math.min(n, m) === 0) return map2;
+    const limit = Math.min(max, maxDifference);
+    const offset = limit + 1;
+    const v2 = new Int32Array(2 * limit + 3);
+    const trace = [];
+    let reached = -1;
+    for (let d = 0; d <= limit && reached < 0; d += 1) {
+      const from = offset - d - 1;
+      trace.push({ from, values: v2.slice(from, offset + d + 2) });
+      for (let k = -d; k <= d; k += 2) {
+        let x2 = k === -d || k !== d && v2[k - 1 + offset] < v2[k + 1 + offset] ? v2[k + 1 + offset] : v2[k - 1 + offset] + 1;
+        let y2 = x2 - k;
+        while (x2 < n && y2 < m && a[start + x2] === b[start + y2]) {
+          x2 += 1;
+          y2 += 1;
+        }
+        v2[k + offset] = x2;
+        if (x2 >= n && y2 >= m) {
+          reached = d;
+          break;
+        }
+      }
+    }
+    if (reached < 0) return null;
+    let x = n;
+    let y = m;
+    for (let d = reached; d > 0; d -= 1) {
+      const { from, values } = trace[d];
+      const at = (k2) => values[k2 + offset - from];
+      const k = x - y;
+      const previousK = k === -d || k !== d && at(k - 1) < at(k + 1) ? k + 1 : k - 1;
+      const previousX = at(previousK);
+      const previousY = previousX - previousK;
+      while (x > previousX && y > previousY) {
+        x -= 1;
+        y -= 1;
+        map2[start + x] = start + y;
+      }
+      x = previousX;
+      y = previousY;
+    }
+    while (x > 0 && y > 0) {
+      x -= 1;
+      y -= 1;
+      map2[start + x] = start + y;
+    }
+    return map2;
+  }
+  function diff3(oLength, aLength, bLength, toA, toB) {
+    const chunks = [];
+    let o = 0;
+    let a = 0;
+    let b = 0;
+    let stableFrom = -1;
+    const closeStable = (end) => {
+      if (stableFrom < 0) return;
+      chunks.push({ stable: true, oStart: stableFrom, length: end - stableFrom, aStart: toA[stableFrom], bStart: toB[stableFrom] });
+      stableFrom = -1;
+    };
+    for (let index = 0; index <= oLength; index += 1) {
+      const atEnd = index === oLength;
+      if (!atEnd && (toA[index] < 0 || toB[index] < 0)) continue;
+      const nextA = atEnd ? aLength : toA[index];
+      const nextB = atEnd ? bLength : toB[index];
+      if (index > o || nextA > a || nextB > b) {
+        closeStable(o);
+        chunks.push({ stable: false, o: [o, index], a: [a, nextA], b: [b, nextB] });
+      }
+      if (atEnd) {
+        closeStable(oLength);
+        break;
+      }
+      if (stableFrom < 0) stableFrom = index;
+      o = index + 1;
+      a = nextA + 1;
+      b = nextB + 1;
+    }
+    return chunks;
+  }
+
+  // src/shim/styleMerge.ts
+  var MAX_LINE_DIFFERENCE = 2500;
+  var MAX_CHAR_DIFFERENCE = 1500;
+  var MAX_CHUNK_CHARS = 4e4;
+  var MAX_TOUCHED_ENTRIES = 400;
+  function splitLines(text2) {
+    if (text2 === "") return [];
+    const lines = text2.split("\n").map((line, index, all) => index < all.length - 1 ? `${line}
+` : line);
+    if (lines[lines.length - 1] === "") lines.pop();
+    return lines;
+  }
+  var isBlank = (line) => line.trim() === "";
+  function planOrigin(content, blocks) {
+    if (!blocks || blocks.length === 0) return null;
+    const lines = splitLines(content);
+    const lineStarts2 = [];
+    let offset = 0;
+    for (const line of lines) {
+      lineStarts2.push(offset);
+      offset += line.length;
+    }
+    const lineAt = (position) => {
+      let low = 0;
+      let high = lineStarts2.length - 1;
+      while (low < high) {
+        const middle = low + high + 1 >> 1;
+        if (lineStarts2[middle] <= position) low = middle;
+        else high = middle - 1;
+      }
+      return low;
+    };
+    const entries = [];
+    let cursor = 0;
+    let cursorLine = 0;
+    let waiting = [];
+    const placeWaiting = (untilLine) => {
+      if (waiting.length === 0) return;
+      let start = cursorLine;
+      let end = untilLine;
+      while (start < end && isBlank(lines[start])) start += 1;
+      while (end > start && isBlank(lines[end - 1])) end -= 1;
+      if (end > start) entries.push({ start, end, canonical: waiting.join("\n\n") });
+      waiting = [];
+    };
+    for (const block2 of blocks) {
+      if (block2.source === null || block2.source === "") {
+        waiting.push(block2.serialized);
+        continue;
+      }
+      let found = content.indexOf(block2.source, cursor);
+      while (found >= 0) {
+        const startsLine = found === 0 || content[found - 1] === "\n" || content.slice(content.lastIndexOf("\n", found - 1) + 1, found).trim() === "";
+        const after = found + block2.source.length;
+        const endsLine = after === content.length || content[after] === "\n" || content.slice(after, content.indexOf("\n", after) < 0 ? content.length : content.indexOf("\n", after)).trim() === "";
+        if (startsLine && endsLine) break;
+        found = content.indexOf(block2.source, found + 1);
+      }
+      if (found < 0) return null;
+      const start = lineAt(found);
+      const end = lineAt(Math.max(found, found + block2.source.length - 1)) + 1;
+      placeWaiting(start);
+      entries.push({ start, end, canonical: block2.serialized });
+      cursor = found + block2.source.length;
+      cursorLine = end;
+    }
+    placeWaiting(lines.length);
+    return { content, lines, entries };
+  }
+  var idsOf = (lines, table2) => {
+    const ids = new Int32Array(lines.length);
+    lines.forEach((line, index) => {
+      let id = table2.get(line);
+      if (id === void 0) {
+        id = table2.size;
+        table2.set(line, id);
+      }
+      ids[index] = id;
+    });
+    return ids;
+  };
+  var codesOf = (text2) => {
+    const codes = new Uint16Array(text2.length);
+    for (let index = 0; index < text2.length; index += 1) codes[index] = text2.charCodeAt(index);
+    return codes;
+  };
+  var isWhitespace = (text2) => /^\s*$/.test(text2);
+  function mergeCharacters(o, a, b) {
+    if (a === o) return b;
+    if (b === o || a === b) return a;
+    if (o.length + a.length + b.length > MAX_CHUNK_CHARS) return null;
+    const oCodes = codesOf(o);
+    const toA = lcsMap(oCodes, codesOf(a), MAX_CHAR_DIFFERENCE);
+    const toB = lcsMap(oCodes, codesOf(b), MAX_CHAR_DIFFERENCE);
+    if (!toA || !toB) return null;
+    let merged = "";
+    for (const chunk of diff3(o.length, a.length, b.length, toA, toB)) {
+      if (chunk.stable) {
+        merged += o.slice(chunk.oStart, chunk.oStart + chunk.length);
+        continue;
+      }
+      const base2 = o.slice(chunk.o[0], chunk.o[1]);
+      const ours = a.slice(chunk.a[0], chunk.a[1]);
+      const theirs = b.slice(chunk.b[0], chunk.b[1]);
+      if (ours === base2) merged += theirs;
+      else if (theirs === base2 || ours === theirs) merged += ours;
+      else if (base2.length === ours.length && base2.length === theirs.length && [...base2].every((character, index) => ours[index] === character || theirs[index] === character || ours[index] === theirs[index])) {
+        merged += [...base2].map((character, index) => ours[index] === character ? theirs[index] : ours[index]).join("");
+      } else if (base2 !== "" && theirs.startsWith(base2)) merged += ours + theirs.slice(base2.length);
+      else if (base2 !== "" && theirs.endsWith(base2)) merged += theirs.slice(0, theirs.length - base2.length) + ours;
+      else if (base2 !== "" && ours.startsWith(base2)) merged += theirs + ours.slice(base2.length);
+      else if (base2 !== "" && ours.endsWith(base2)) merged += ours.slice(0, ours.length - base2.length) + theirs;
+      else if (isWhitespace(base2) && isWhitespace(theirs)) merged += ours;
+      else if (isWhitespace(base2) && isWhitespace(ours)) merged += theirs;
+      else return null;
+    }
+    return merged;
+  }
+  var BULLET = /^(\s*(?:>\s*)*)([-*+])(\s+)/;
+  var ORDERED = /^(\s*(?:>\s*)*)(\d{1,9})([.)])(\s+)/;
+  function harmonizeListMarkers(lines) {
+    const bulletCounts = /* @__PURE__ */ new Map();
+    const orderedCounts = /* @__PURE__ */ new Map();
+    const count = (table2, indent, marker) => {
+      const byMarker = table2.get(indent) ?? /* @__PURE__ */ new Map();
+      byMarker.set(marker, (byMarker.get(marker) ?? 0) + 1);
+      table2.set(indent, byMarker);
+    };
+    for (const line of lines) {
+      const bullet = BULLET.exec(line);
+      if (bullet) count(bulletCounts, bullet[1], bullet[2]);
+      const ordered = ORDERED.exec(line);
+      if (ordered) count(orderedCounts, ordered[1], ordered[3]);
+    }
+    const favourite = (table2, indent) => {
+      const byMarker = table2.get(indent);
+      if (!byMarker || byMarker.size < 2) return null;
+      return [...byMarker].sort((x, y) => y[1] - x[1])[0][0];
+    };
+    return lines.map((line) => {
+      const bullet = BULLET.exec(line);
+      if (bullet) {
+        const marker = favourite(bulletCounts, bullet[1]);
+        return marker && marker !== bullet[2] ? `${bullet[1]}${marker}${line.slice(bullet[1].length + 1)}` : line;
+      }
+      const ordered = ORDERED.exec(line);
+      if (ordered) {
+        const delimiter2 = favourite(orderedCounts, ordered[1]);
+        const at = ordered[1].length + ordered[2].length;
+        return delimiter2 && delimiter2 !== ordered[3] ? `${line.slice(0, at)}${delimiter2}${line.slice(at + 1)}` : line;
+      }
+      return line;
+    });
+  }
+  var withoutPadding = (line) => {
+    const squeezed = line.replace(/\s+/g, "");
+    return /^[|:-]+$/.test(squeezed) ? squeezed.replace(/-+/g, "-") : squeezed;
+  };
+  function mergeLine(base2, ours, theirs) {
+    if (theirs === base2 || ours === theirs) return ours;
+    if (ours === base2) return theirs;
+    if (withoutPadding(theirs) === withoutPadding(base2)) return ours;
+    return mergeCharacters(base2, ours, theirs) ?? theirs;
+  }
+  var lineKey = (line) => line.replace(/^\s*(?:>\s*)*(?:(?:[-*+]|\d{1,9}[.)])\s+)?/, "").replace(/^\[[xX]\]/, "[x]").trimEnd();
+  function pairLines(from, to) {
+    const table2 = /* @__PURE__ */ new Map();
+    const map2 = lcsMap(idsOf(from.map(lineKey), table2), idsOf(to.map(lineKey), table2), MAX_LINE_DIFFERENCE);
+    if (!map2) return null;
+    let fromStart = 0;
+    let toStart = 0;
+    for (let index = 0; index <= from.length; index += 1) {
+      const atEnd = index === from.length;
+      if (!atEnd && map2[index] < 0) continue;
+      const toEnd = atEnd ? to.length : map2[index];
+      if (index - fromStart === toEnd - toStart) {
+        for (let offset = 0; offset < index - fromStart; offset += 1) map2[fromStart + offset] = toStart + offset;
+      }
+      fromStart = index + 1;
+      toStart = toEnd + 1;
+    }
+    return map2;
+  }
+  function mergeByPairing(o, a, b) {
+    const toA = pairLines(o, a);
+    const toB = pairLines(o, b);
+    if (!toA || !toB) return null;
+    const lines = [];
+    let nextA = 0;
+    let nextB = 0;
+    for (let index = 0; index < o.length; index += 1) {
+      const inA = toA[index];
+      const inB = toB[index];
+      const authorOnly = inA >= 0 ? a.slice(nextA, inA) : [];
+      if (inA >= 0) nextA = inA + 1;
+      if (inB < 0) continue;
+      lines.push(...authorOnly, ...b.slice(nextB, inB));
+      nextB = inB + 1;
+      lines.push(inA >= 0 ? mergeLine(o[index], a[inA], b[inB]) : b[inB]);
+    }
+    lines.push(...a.slice(nextA), ...b.slice(nextB));
+    return lines;
+  }
+  function mergeConflict(o, a, b) {
+    if (o.length === a.length && a.length === b.length) {
+      return { lines: o.map((base2, index) => mergeLine(base2, a[index], b[index])), conflict: { theirs: b, fine: true } };
+    }
+    const merged = mergeCharacters(o.join(""), a.join(""), b.join(""));
+    const lines = merged === null ? mergeByPairing(o, a, b) : splitLines(merged);
+    return lines === null ? { lines: b } : { lines, conflict: { theirs: b, fine: true } };
+  }
+  function mergeKeepingStyle(origin, editorText, validate) {
+    if (!origin || editorText === origin.content) return editorText;
+    const ending = /\n*$/.exec(origin.content)?.[0] ?? "";
+    const theirs = editorText.replace(/\n*$/, "") + ending;
+    if (theirs === origin.content) return theirs;
+    const ours = origin.lines;
+    const theirLines = splitLines(theirs);
+    const table2 = /* @__PURE__ */ new Map();
+    const ourIds = idsOf(ours, table2);
+    const toTheirs = lcsMap(ourIds, idsOf(theirLines, table2), MAX_LINE_DIFFERENCE);
+    if (!toTheirs) return theirs;
+    const insertedBefore = new Uint8Array(ours.length + 1);
+    let expected = 0;
+    for (let index = 0; index < ours.length; index += 1) {
+      if (toTheirs[index] < 0) continue;
+      if (toTheirs[index] > expected) insertedBefore[index] = 1;
+      expected = toTheirs[index] + 1;
+    }
+    if (expected < theirLines.length) insertedBefore[ours.length] = 1;
+    const touched = origin.entries.filter((entry) => {
+      for (let line2 = entry.start; line2 < entry.end; line2 += 1) {
+        if (toTheirs[line2] < 0) return true;
+        if (line2 > entry.start && insertedBefore[line2] === 1) return true;
+      }
+      return false;
+    });
+    if (touched.length === 0 || touched.length > MAX_TOUCHED_ENTRIES) return theirs;
+    const base2 = [];
+    let line = 0;
+    for (const entry of touched) {
+      for (; line < entry.start; line += 1) base2.push(ours[line]);
+      const ending2 = ours[entry.end - 1].endsWith("\n") ? "\n" : "";
+      const canonical = splitLines(entry.canonical);
+      if (canonical.length > 0) canonical[canonical.length - 1] = canonical[canonical.length - 1].replace(/\n$/, "") + ending2;
+      base2.push(...canonical);
+      line = entry.end;
+    }
+    for (; line < ours.length; line += 1) base2.push(ours[line]);
+    const baseIds = idsOf(base2, table2);
+    const baseToOurs = lcsMap(baseIds, ourIds, MAX_LINE_DIFFERENCE);
+    const baseToTheirs = lcsMap(baseIds, idsOf(theirLines, table2), MAX_LINE_DIFFERENCE);
+    if (!baseToOurs || !baseToTheirs) return theirs;
+    const pieces = [];
+    for (const chunk of diff3(base2.length, ours.length, theirLines.length, baseToOurs, baseToTheirs)) {
+      if (chunk.stable) {
+        pieces.push({ lines: base2.slice(chunk.oStart, chunk.oStart + chunk.length) });
+        continue;
+      }
+      const o = base2.slice(chunk.o[0], chunk.o[1]);
+      const a = ours.slice(chunk.a[0], chunk.a[1]);
+      const b = theirLines.slice(chunk.b[0], chunk.b[1]);
+      const same = (x, y) => x.length === y.length && x.every((value, index) => value === y[index]);
+      if (same(a, o)) pieces.push({ lines: b });
+      else if (same(b, o) || same(a, b)) pieces.push({ lines: a });
+      else pieces.push(mergeConflict(o, a, b));
+    }
+    const assemble = (choose) => pieces.map((piece) => choose(piece).join("")).join("");
+    const attempts = [
+      // Everything merged.
+      assemble((piece) => piece.lines),
+      // The same, with added list items given their siblings' marker.
+      assemble((piece) => piece.conflict ? harmonizeListMarkers(piece.lines) : piece.lines),
+      // Only whole-line choices: where characters had to be merged, the editor's lines.
+      assemble((piece) => piece.conflict?.fine ? piece.conflict.theirs : piece.lines)
+    ];
+    const tried = /* @__PURE__ */ new Set([theirs]);
+    for (const candidate of attempts) {
+      if (tried.has(candidate)) continue;
+      tried.add(candidate);
+      if (validate(candidate, theirs)) return candidate;
+    }
+    return theirs;
+  }
+
   // src/shim/documentHost.ts
   var SETTLE_INLINE_MAX = 2e5;
   var trailingNewlines = (text2) => /\n*$/.exec(text2)?.[0] ?? "";
@@ -7748,6 +8154,10 @@ ${GUEST_UI_LOOK_CSS}`;
     current;
     revision = 1;
     settled = true;
+    /** The editor's latest text, when merging it was put off. */
+    unmerged = null;
+    origin = null;
+    validate = null;
     mode;
     sameRendering;
     constructor(text2, options) {
@@ -7791,10 +8201,12 @@ ${GUEST_UI_LOOK_CSS}`;
      * is kept, so untouched parts of the file keep the bytes they had.
      */
     applyEditorContent(editorContent) {
-      const next = this.normalize(editorContent);
+      const large = editorContent.length > SETTLE_INLINE_MAX;
+      const deferred = large && this.dirty;
+      this.unmerged = deferred ? editorContent : null;
+      const next = this.normalize(deferred ? editorContent : this.withAuthorStyle(editorContent));
       if (next === this.current) return "unchanged";
-      const large = next.length > SETTLE_INLINE_MAX;
-      if (!(large && this.dirty) && this.equivalent(next, this.current)) return "unchanged";
+      if (!deferred && this.equivalent(next, this.current)) return "unchanged";
       this.current = next;
       this.revision += 1;
       this.settled = false;
@@ -7802,15 +8214,25 @@ ${GUEST_UI_LOOK_CSS}`;
       return "changed";
     }
     /**
-     * If the document now renders the same as the saved text, go back to the saved text itself.
-     * Cheap to call again: it does the comparison once per change.
+     * Finish what applyEditorContent put off, and if the document now renders the same as the
+     * saved text, go back to the saved text itself. Cheap to call again: it works once per change.
      *
-     * @returns true when the text was changed back
+     * @returns true when the text changed
      */
     settle() {
       if (this.settled) return false;
       this.settled = true;
-      if (this.current === this.saved || !this.equivalent(this.current, this.saved)) return false;
+      let changed = false;
+      if (this.unmerged !== null) {
+        const next = this.normalize(this.withAuthorStyle(this.unmerged));
+        this.unmerged = null;
+        if (next !== this.current) {
+          this.current = next;
+          this.revision += 1;
+          changed = true;
+        }
+      }
+      if (this.current === this.saved || !this.equivalent(this.current, this.saved)) return changed;
       this.current = this.saved;
       this.revision += 1;
       return true;
@@ -7818,7 +8240,7 @@ ${GUEST_UI_LOOK_CSS}`;
     /** A snapshot with this text reached the disk. */
     markSaved(text2) {
       this.saved = text2;
-      this.settled = true;
+      this.settled = this.unmerged === null;
     }
     /** The host handed over the file again, for example after it changed on disk. */
     replace(text2) {
@@ -7826,6 +8248,34 @@ ${GUEST_UI_LOOK_CSS}`;
       this.current = text2;
       this.revision += 1;
       this.settled = true;
+      this.unmerged = null;
+      this.origin = null;
+    }
+    /**
+     * Tell the document what the editor made of the text it just loaded.
+     *
+     * Call right after the editor takes {@link contentForEditor}, before any edit. With this,
+     * an edited block keeps the author's style (see styleMerge.ts). Without it, an edited block
+     * is saved the way the editor writes it.
+     *
+     * @param blocks - the editor's top-level blocks, or null when it cannot say
+     * @param validate - whether a text loads as the document on screen
+     */
+    setOrigin(blocks, validate) {
+      this.validate = validate;
+      try {
+        this.origin = validate ? planOrigin(this.contentForEditor(), blocks) : null;
+      } catch {
+        this.origin = null;
+      }
+    }
+    withAuthorStyle(editorContent) {
+      if (!this.origin || !this.validate) return editorContent;
+      try {
+        return mergeKeepingStyle(this.origin, editorContent, this.validate);
+      } catch {
+        return editorContent;
+      }
     }
     equivalent(a, b) {
       try {
@@ -7843,6 +8293,117 @@ ${GUEST_UI_LOOK_CSS}`;
     }
     return `${text2.length.toString(36)}-${(hash >>> 0).toString(36)}`;
   }
+
+  // src/shim/fileIndex.ts
+  var SKIPPED_FOLDERS = /* @__PURE__ */ new Set(["node_modules", ".git", ".hg", ".svn", ".vscode", ".idea", "dist", "build", "out", ".next", ".nuxt", "coverage", ".venv", "venv", "__pycache__", ".cache", "target", ".upstream"]);
+  var CATEGORIES = {
+    md: [".md", ".markdown"],
+    images: [".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp", ".ico"],
+    code: [".js", ".ts", ".jsx", ".tsx", ".py", ".java", ".cpp", ".c", ".h", ".go", ".rs", ".rb", ".php", ".swift", ".kt", ".cs", ".sh", ".bash", ".zsh", ".fish"],
+    config: [".json", ".xml", ".yaml", ".yml", ".toml", ".ini", ".conf", ".config", ".properties"]
+  };
+  var MAX_FILES = 4e3;
+  var MAX_FOLDERS = 600;
+  var MAX_DEPTH = 10;
+  var WALK_BUDGET_MS = 5e3;
+  var FRESH_FOR_MS = 6e4;
+  var MAX_RESULTS = 20;
+  var extension = (name) => {
+    const dot = name.lastIndexOf(".");
+    return dot <= 0 ? "" : name.slice(dot).toLowerCase();
+  };
+  function relativeFrom(folder2, filePath) {
+    const from = folder2 === "" ? [] : folder2.split("/");
+    const to = filePath.split("/");
+    let shared = 0;
+    while (shared < from.length && shared < to.length - 1 && from[shared] === to[shared]) shared += 1;
+    return [...from.slice(shared).map(() => ".."), ...to.slice(shared)].join("/");
+  }
+  var FileIndex = class {
+    constructor(options) {
+      this.options = options;
+      this.now = options.now ?? (() => Date.now());
+    }
+    options;
+    files = [];
+    builtAt = Number.NEGATIVE_INFINITY;
+    building = null;
+    now;
+    /** Forget the list, for example when another project is opened. */
+    reset() {
+      this.files = [];
+      this.builtAt = Number.NEGATIVE_INFINITY;
+    }
+    /**
+     * @param query - what the person typed
+     * @param folder - the open document's folder inside the project ('' for the project root)
+     */
+    async search(query, filters, folder2) {
+      const wanted = query.trim().toLowerCase();
+      if (wanted === "") return [];
+      await this.ensureFresh();
+      const allowed = filters.all === false ? new Set(["md", "images", "code", "config"].flatMap((name) => filters[name] ? CATEGORIES[name] : [])) : null;
+      const parts = wanted.split(/\s+/);
+      const scored = [];
+      for (const path of this.files) {
+        const name = path.slice(path.lastIndexOf("/") + 1);
+        if (allowed && !allowed.has(extension(name))) continue;
+        const lowerName = name.toLowerCase();
+        const lowerPath = path.toLowerCase();
+        let rank;
+        if (lowerName === wanted) rank = 0;
+        else if (lowerName.startsWith(wanted)) rank = 1;
+        else if (lowerName.includes(wanted)) rank = 2;
+        else if (lowerPath.includes(wanted)) rank = 3;
+        else if (parts.length > 1 && parts.every((part) => lowerPath.includes(part))) rank = 4;
+        else continue;
+        scored.push({ path, name, rank });
+      }
+      scored.sort((a, b) => a.rank - b.rank || a.path.length - b.path.length || a.path.localeCompare(b.path));
+      return scored.slice(0, MAX_RESULTS).map(({ path, name }) => ({ filename: name, path: relativeFrom(folder2, path) }));
+    }
+    ensureFresh() {
+      if (this.now() - this.builtAt < FRESH_FOR_MS) return Promise.resolve();
+      this.building ??= this.walk().finally(() => {
+        this.building = null;
+      });
+      return this.building;
+    }
+    /** Breadth first, so the files nearest the project root are found before any limit is hit. */
+    async walk() {
+      const started = this.now();
+      const files = [];
+      let queue = [{ path: "", depth: 0 }];
+      let folders = 0;
+      while (queue.length > 0 && files.length < MAX_FILES && folders < MAX_FOLDERS && this.now() - started < WALK_BUDGET_MS) {
+        const batch = queue.splice(0, 8);
+        folders += batch.length;
+        const listings = await Promise.all(
+          batch.map(async ({ path, depth }) => {
+            try {
+              return { path, depth, entries: (await this.options.listDir(path === "" ? "." : path)).entries };
+            } catch {
+              return { path, depth, entries: [] };
+            }
+          })
+        );
+        const next = [];
+        for (const { path, depth, entries } of listings) {
+          for (const entry of entries) {
+            const child = path === "" ? entry.name : `${path}/${entry.name}`;
+            if (entry.kind === "file") {
+              if (files.length < MAX_FILES) files.push(child);
+            } else if (entry.kind === "directory" && depth < MAX_DEPTH && !SKIPPED_FOLDERS.has(entry.name)) {
+              next.push({ path: child, depth: depth + 1 });
+            }
+          }
+        }
+        queue = [...queue, ...next];
+      }
+      this.files = files;
+      this.builtAt = this.now();
+    }
+  };
 
   // src/shim/paths.ts
   var toSlashes = (value) => value.replace(/\\/g, "/");
@@ -7929,11 +8490,1182 @@ ${GUEST_UI_LOOK_CSS}`;
     };
   }
 
+  // src/shim/color.ts
+  function parseHex(value) {
+    const hex = (value ?? "").trim().replace(/^#/, "");
+    if (!/^([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(hex)) return null;
+    const full = hex.length === 3 ? [...hex].map((digit) => digit + digit).join("") : hex;
+    const channel = (index) => Number.parseInt(full.slice(index, index + 2), 16);
+    return { rgb: [channel(0), channel(2), channel(4)], alpha: full.length === 8 ? channel(6) / 255 : 1 };
+  }
+  function toHex(rgb) {
+    return `#${rgb.map((channel) => Math.round(Math.min(255, Math.max(0, channel))).toString(16).padStart(2, "0")).join("")}`;
+  }
+  function mix2(a, b, amount) {
+    return [a[0] + (b[0] - a[0]) * amount, a[1] + (b[1] - a[1]) * amount, a[2] + (b[2] - a[2]) * amount];
+  }
+  function solid(value, backdrop, fallback) {
+    const parsed = parseHex(value);
+    if (!parsed) return fallback;
+    return parsed.alpha >= 1 ? parsed.rgb : mix2(backdrop, parsed.rgb, parsed.alpha);
+  }
+
+  // src/shim/mermaidTheme.ts
+  var WHITE = [255, 255, 255];
+  var BLACK = [0, 0, 0];
+  function mermaidThemeFor(mode, tokens) {
+    const dark = mode === "dark";
+    const background = solid(tokens.background, dark ? BLACK : WHITE, dark ? [14, 12, 11] : [250, 249, 247]);
+    const on = (value, fallback) => solid(value, background, fallback);
+    const foreground = on(tokens.foreground, dark ? [219, 215, 204] : [68, 68, 61]);
+    const muted2 = on(tokens.muted, mix2(background, foreground, 0.6));
+    const elevated2 = on(tokens.elevated, mix2(background, foreground, 0.05));
+    const primary2 = on(tokens.primary, dark ? [218, 124, 71] : [179, 80, 23]);
+    const warning = on(tokens.warning, [198, 127, 19]);
+    const node = mix2(background, primary2, dark ? 0.2 : 0.1);
+    const nodeBorder = mix2(background, primary2, dark ? 0.62 : 0.5);
+    const line = mix2(background, foreground, dark ? 0.55 : 0.6);
+    const chart = [tokens.primary, tokens.info, tokens.success, tokens.warning, tokens.error, tokens.syntaxType, tokens.syntaxKeyword, tokens.syntaxString].map((value) => on(value, primary2)).map((colour) => toHex(mix2(colour, background, dark ? 0.15 : 0.1)));
+    const themeVariables = {
+      darkMode: dark,
+      background: toHex(elevated2),
+      primaryColor: toHex(node),
+      primaryTextColor: toHex(foreground),
+      primaryBorderColor: toHex(nodeBorder),
+      lineColor: toHex(line),
+      textColor: toHex(foreground),
+      titleColor: toHex(foreground),
+      edgeLabelBackground: toHex(elevated2),
+      clusterBkg: toHex(mix2(elevated2, foreground, 0.04)),
+      clusterBorder: toHex(mix2(background, foreground, 0.22)),
+      noteBkgColor: toHex(mix2(background, warning, dark ? 0.22 : 0.16)),
+      noteTextColor: toHex(foreground),
+      noteBorderColor: toHex(mix2(background, warning, 0.55)),
+      activationBkgColor: toHex(mix2(background, primary2, dark ? 0.32 : 0.2)),
+      activationBorderColor: toHex(nodeBorder),
+      signalColor: toHex(line),
+      signalTextColor: toHex(foreground),
+      labelBoxBkgColor: toHex(node),
+      labelBoxBorderColor: toHex(nodeBorder),
+      labelTextColor: toHex(foreground),
+      loopTextColor: toHex(foreground),
+      actorLineColor: toHex(mix2(background, muted2, 0.7)),
+      pieStrokeColor: toHex(elevated2),
+      pieOuterStrokeColor: toHex(mix2(background, foreground, 0.22)),
+      pieTitleTextColor: toHex(foreground),
+      pieSectionTextColor: toHex(dark ? foreground : WHITE),
+      pieLegendTextColor: toHex(foreground)
+    };
+    chart.forEach((colour, index) => {
+      themeVariables[`pie${index + 1}`] = colour;
+    });
+    return {
+      theme: "base",
+      themeVariables,
+      key: [mode, tokens.background, tokens.foreground, tokens.primary, tokens.elevated].join("|")
+    };
+  }
+
+  // .upstream/markdown-for-humans/src/editor/feedbackAnchors.ts
+  var FEEDBACK_ANCHOR_ERROR_CODE = "MD4H-FB-ANCHOR-002";
+  var markdownParser = new lib_default({
+    html: true,
+    breaks: false,
+    linkify: false
+  });
+  var ORDERED_LIST_ITEM_PATTERN = /^(\s*)(\d+)\.\s+(.*)$/;
+  var INDENTED_LINE_PATTERN = /^\s/;
+  var TASK_ITEM_PATTERN = /^(\s*)([-+*])\s+\[([ xX])\]\s+(.*)$/;
+  var THREE_SPACE_ORDERED_LIST_ROOT_PATTERN = /^ {3}\d+\.\s+/;
+  function hasThreeSpaceOrderedListRoot(markdown) {
+    let tokens;
+    try {
+      tokens = markdownParser.parse(markdown, {});
+    } catch {
+      return false;
+    }
+    const sourceLines = markdown.split(/\r?\n/);
+    return tokens.some(
+      (token) => token.level === 0 && token.type === "ordered_list_open" && token.map !== null && THREE_SPACE_ORDERED_LIST_ROOT_PATTERN.test(sourceLines[token.map[0]] ?? "")
+    );
+  }
+  function failure(reason, detail) {
+    return {
+      ok: false,
+      error: {
+        code: FEEDBACK_ANCHOR_ERROR_CODE,
+        reason,
+        detail
+      }
+    };
+  }
+  function normalizeCanonicalKind(kind) {
+    const compactKind = kind.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+    switch (compactKind) {
+      case "frontmatter":
+      case "yamlfrontmatter":
+      case "jsonfrontmatter":
+        return "frontmatter";
+      case "paragraph":
+      case "markdownparagraph":
+      case "textblock":
+      case "image":
+      case "math":
+      case "mathblock":
+        return "paragraph";
+      case "heading":
+        return "heading";
+      case "list":
+      case "bulletlist":
+      case "orderedlist":
+      case "tasklist":
+        return "list";
+      case "blockquote":
+      case "alert":
+      case "githubalert":
+        return "blockquote";
+      case "code":
+      case "codeblock":
+      case "fence":
+      case "fencedcode":
+      case "mermaid":
+      case "preservedcodeblock":
+      case "indentedimagecodeblock":
+        return "code";
+      case "table":
+        return "table";
+      case "horizontalrule":
+      case "thematicbreak":
+      case "hr":
+        return "thematicBreak";
+      case "html":
+      case "htmlblock":
+        return "html";
+      default:
+        return null;
+    }
+  }
+  function isStandaloneHtmlImage(content) {
+    let remaining = content;
+    let imageCount = 0;
+    while (remaining.trim().length > 0) {
+      const image2 = /^\s*<img(?=\s|\/?>)((?:[^>"']|"[^"]*"|'[^']*')*)>/i.exec(remaining);
+      if (!image2) return false;
+      const attributes = image2[1].matchAll(
+        /([^\s=/>]+)(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?/g
+      );
+      if (![...attributes].some((attribute2) => attribute2[1].toLowerCase() === "src")) return false;
+      imageCount++;
+      remaining = remaining.slice(image2[0].length);
+    }
+    return imageCount > 0;
+  }
+  function kindForToken(token) {
+    switch (token.type) {
+      case "paragraph_open":
+        return "paragraph";
+      case "heading_open":
+        return "heading";
+      case "bullet_list_open":
+      case "ordered_list_open":
+        return "list";
+      case "blockquote_open":
+        return "blockquote";
+      case "fence":
+      case "code_block":
+        return "code";
+      case "table_open":
+        return "table";
+      case "hr":
+        return "thematicBreak";
+      case "html_block":
+        if (/^\s*<table(?:\s|>)/i.test(token.content)) return "table";
+        return isStandaloneHtmlImage(token.content) ? "paragraph" : "html";
+      default:
+        return null;
+    }
+  }
+  function leadingWhitespaceLength(line) {
+    return line.match(/^\s*/)?.[0].length ?? 0;
+  }
+  function tipTapTaskListRuns(lines, start, end) {
+    const runs = [];
+    let line = start;
+    while (line < end) {
+      while (line < end && (lines[line] ?? "").trim() === "") line += 1;
+      if (line >= end) break;
+      if (!TASK_ITEM_PATTERN.test(lines[line] ?? "")) return null;
+      const runStart = line;
+      let item = (lines[line] ?? "").match(TASK_ITEM_PATTERN);
+      while (item) {
+        const indent = item[1].length;
+        line += 1;
+        while (line < lines.length) {
+          const next = lines[line] ?? "";
+          if (next.trim() === "") {
+            let nonBlank = line + 1;
+            while (nonBlank < lines.length && (lines[nonBlank] ?? "").trim() === "") nonBlank += 1;
+            if (nonBlank >= lines.length) break;
+            if (leadingWhitespaceLength(lines[nonBlank] ?? "") <= indent) break;
+            line += 1;
+            continue;
+          }
+          if (leadingWhitespaceLength(next) <= indent) break;
+          line += 1;
+        }
+        item = (lines[line] ?? "").match(TASK_ITEM_PATTERN);
+      }
+      let runEnd = line;
+      while (runEnd > runStart + 1 && (lines[runEnd - 1] ?? "").trim() === "") runEnd -= 1;
+      if (runEnd > end) return null;
+      runs.push([runStart, runEnd]);
+    }
+    return runs.length > 0 ? runs : null;
+  }
+  function parseMarkdownItTopLevelBlocks(markdown, lineOffset) {
+    let tokens;
+    try {
+      tokens = markdownParser.parse(markdown, {});
+    } catch (error2) {
+      const message = error2 instanceof Error ? error2.message : "Unknown Markdown parser failure.";
+      return {
+        code: FEEDBACK_ANCHOR_ERROR_CODE,
+        reason: "unsupported-raw-block",
+        detail: `Markdown parsing failed: ${message}`
+      };
+    }
+    const blocks = [];
+    const sourceLines = markdown.split(/\r?\n/);
+    for (const token of tokens) {
+      if (token.level !== 0 || token.map === null) {
+        continue;
+      }
+      const kind = kindForToken(token);
+      if (kind === null) {
+        return {
+          code: FEEDBACK_ANCHOR_ERROR_CODE,
+          reason: "unsupported-raw-block",
+          detail: `Markdown token ${token.type} cannot be anchored safely.`
+        };
+      }
+      const [startLine, tokenEndLineExclusive] = token.map;
+      let endLineExclusive = tokenEndLineExclusive;
+      while (endLineExclusive > startLine + 1 && (sourceLines[endLineExclusive - 1] ?? "").trim() === "") {
+        endLineExclusive -= 1;
+      }
+      const taskRuns = token.type === "bullet_list_open" ? tipTapTaskListRuns(sourceLines, startLine, endLineExclusive) : null;
+      for (const [runStart, runEnd] of taskRuns ?? [[startLine, endLineExclusive]]) {
+        blocks.push({
+          kind,
+          startLine: runStart + lineOffset + 1,
+          endLine: runEnd + lineOffset
+        });
+      }
+    }
+    return blocks;
+  }
+  function tipTapOrderedListEnd(sourceLines, startLine) {
+    let currentLine = startLine;
+    let consumed = startLine;
+    while (currentLine < sourceLines.length) {
+      if (!ORDERED_LIST_ITEM_PATTERN.test(sourceLines[currentLine] ?? "")) break;
+      let nextLine = currentLine + 1;
+      while (nextLine < sourceLines.length) {
+        const candidate = sourceLines[nextLine] ?? "";
+        if (ORDERED_LIST_ITEM_PATTERN.test(candidate)) break;
+        if (candidate.trim() === "" || INDENTED_LINE_PATTERN.test(candidate)) {
+          nextLine += 1;
+          continue;
+        }
+        break;
+      }
+      consumed = nextLine;
+      currentLine = nextLine;
+    }
+    return consumed;
+  }
+  function orderedListSpans(markdown, tokens) {
+    const sourceLines = markdown.split(/\r?\n/);
+    const spans = [];
+    for (const token of tokens) {
+      if (token.level !== 0 || token.type !== "ordered_list_open" || token.map === null) continue;
+      const [startLine, markdownItEndLineExclusive] = token.map;
+      const rootMatch = sourceLines[startLine]?.match(ORDERED_LIST_ITEM_PATTERN);
+      if (!rootMatch || rootMatch[1] !== "") continue;
+      const previous = spans[spans.length - 1];
+      if (previous && startLine < previous.endLineExclusive) continue;
+      const endLineExclusive = tipTapOrderedListEnd(sourceLines, startLine);
+      let contentEndLineExclusive = endLineExclusive;
+      while (contentEndLineExclusive > startLine + 1 && (sourceLines[contentEndLineExclusive - 1] ?? "").trim() === "") {
+        contentEndLineExclusive -= 1;
+      }
+      if (contentEndLineExclusive > markdownItEndLineExclusive) {
+        spans.push({ startLine, endLineExclusive });
+      }
+    }
+    return spans;
+  }
+  function restoreLineEndings(markdown, lines) {
+    const endings = markdown.match(/\r\n|\n/g) ?? [];
+    return lines.map((line, index) => `${line}${endings[index] ?? ""}`).join("");
+  }
+  function adaptTipTapOrderedListBoundaries(markdown, tokens) {
+    const spans = orderedListSpans(markdown, tokens);
+    if (spans.length === 0) return markdown;
+    const sourceLines = markdown.split(/\r?\n/);
+    const shadowLines = [...sourceLines];
+    for (const span of spans) {
+      const rootMatch = sourceLines[span.startLine]?.match(/^( *)(\d+)\.\s+(.*)$/);
+      if (!rootMatch) return markdown;
+      const rootIndent = rootMatch[1].length;
+      let contentIndent = rootIndent + rootMatch[2].length + 2;
+      for (let lineIndex = span.startLine + 1; lineIndex < span.endLineExclusive; lineIndex += 1) {
+        const sourceLine = sourceLines[lineIndex] ?? "";
+        if (sourceLine.trim() === "") continue;
+        const orderedItem = sourceLine.match(/^( *)(\d+)\.\s+(.*)$/);
+        const leadingSpaces = sourceLine.match(/^( *)/)?.[1].length ?? 0;
+        if (sourceLine[leadingSpaces] === "	" || leadingSpaces < rootIndent) return markdown;
+        if (orderedItem && leadingSpaces === rootIndent) {
+          contentIndent = rootIndent + orderedItem[2].length + 2;
+          continue;
+        }
+        if (leadingSpaces <= rootIndent) return markdown;
+        if (leadingSpaces < contentIndent) {
+          shadowLines[lineIndex] = `${" ".repeat(contentIndent - leadingSpaces)}${sourceLine}`;
+        }
+      }
+    }
+    const shadowMarkdown = restoreLineEndings(markdown, shadowLines);
+    let shadowTokens;
+    try {
+      shadowTokens = markdownParser.parse(shadowMarkdown, {});
+    } catch {
+      return markdown;
+    }
+    for (const span of spans) {
+      let contentEndLineExclusive = span.endLineExclusive;
+      while (contentEndLineExclusive > span.startLine + 1 && (sourceLines[contentEndLineExclusive - 1] ?? "").trim() === "") {
+        contentEndLineExclusive -= 1;
+      }
+      const overlapping = shadowTokens.filter(
+        (token) => token.level === 0 && token.map !== null && token.map[0] < contentEndLineExclusive && token.map[1] > span.startLine
+      );
+      if (overlapping.length !== 1 || overlapping[0].type !== "ordered_list_open" || overlapping[0].map?.[0] !== span.startLine || (overlapping[0].map?.[1] ?? 0) < contentEndLineExclusive || (overlapping[0].map?.[1] ?? Number.POSITIVE_INFINITY) > span.endLineExclusive) {
+        return markdown;
+      }
+    }
+    return shadowMarkdown;
+  }
+  function parseTopLevelBlocks(markdown, lineOffset) {
+    let tokens;
+    try {
+      tokens = markdownParser.parse(markdown, {});
+    } catch (error2) {
+      const message = error2 instanceof Error ? error2.message : "Unknown Markdown parser failure.";
+      return {
+        code: FEEDBACK_ANCHOR_ERROR_CODE,
+        reason: "unsupported-raw-block",
+        detail: `Markdown parsing failed: ${message}`
+      };
+    }
+    return parseMarkdownItTopLevelBlocks(
+      adaptTipTapOrderedListBoundaries(markdown, tokens),
+      lineOffset
+    );
+  }
+  function lineStarts(markdown) {
+    const starts = [0];
+    const newlinePattern = /\r\n|\n/g;
+    let match2;
+    while ((match2 = newlinePattern.exec(markdown)) !== null) {
+      starts.push(match2.index + match2[0].length);
+    }
+    return starts;
+  }
+  function lineText(markdown, starts, index) {
+    const nextStart = index + 1 < starts.length ? starts[index + 1] : markdown.length;
+    return markdown.slice(starts[index], nextStart).replace(/\r?\n$/, "");
+  }
+  function extractLeadingYamlFrontmatter(markdown) {
+    const starts = lineStarts(markdown);
+    const firstLine = lineText(markdown, starts, 0).replace(/^\uFEFF/, "");
+    if (!/^---[ \t]*$/.test(firstLine)) {
+      return null;
+    }
+    for (let index = 1; index < starts.length; index += 1) {
+      const currentLine = lineText(markdown, starts, index);
+      if (!/^(?:---|\.\.\.)[ \t]*$/.test(currentLine)) {
+        continue;
+      }
+      const bodyStart = index + 1 < starts.length ? starts[index + 1] : markdown.length;
+      return {
+        endLine: index + 1,
+        bodyMarkdown: markdown.slice(bodyStart),
+        bodyLineOffset: index + 1
+      };
+    }
+    return null;
+  }
+  function extractLeadingJsonFrontmatter(markdown) {
+    const source = markdown.startsWith("\uFEFF") ? markdown.slice(1) : markdown;
+    if (!source.startsWith("{")) {
+      return null;
+    }
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    let closingIndex = -1;
+    for (let index = 0; index < source.length; index += 1) {
+      const character = source[index];
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (character === "\\") {
+          escaped = true;
+        } else if (character === '"') {
+          inString = false;
+        }
+        continue;
+      }
+      if (character === '"') {
+        inString = true;
+      } else if (character === "{") {
+        depth += 1;
+      } else if (character === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          closingIndex = index;
+          break;
+        }
+        if (depth < 0) {
+          return null;
+        }
+      }
+    }
+    if (closingIndex === -1 || inString || depth !== 0) {
+      return null;
+    }
+    const jsonText = source.slice(0, closingIndex + 1);
+    try {
+      const parsed = JSON.parse(jsonText);
+      if (parsed === null || Array.isArray(parsed) || typeof parsed !== "object") {
+        return null;
+      }
+    } catch {
+      return null;
+    }
+    const afterObject = source.slice(closingIndex + 1);
+    const lineEnd = afterObject.match(/^[ \t]*(?:\r\n|\n|$)/);
+    if (!lineEnd) {
+      return null;
+    }
+    const sourceBodyStart = closingIndex + 1 + lineEnd[0].length;
+    const sourcePrefix = source.slice(0, sourceBodyStart);
+    const bodyLineOffset = (sourcePrefix.match(/\n/g) ?? []).length;
+    const endLine = (jsonText.match(/\n/g) ?? []).length + 1;
+    const originalBodyStart = markdown.startsWith("\uFEFF") ? sourceBodyStart + 1 : sourceBodyStart;
+    return {
+      endLine,
+      bodyMarkdown: markdown.slice(originalBodyStart),
+      bodyLineOffset
+    };
+  }
+  function isFencedFrontmatter(markdown) {
+    const lines = markdown.split(/\r?\n/);
+    const opening = lines[0]?.match(/^([`~]{3,})[ \t]*(yaml|yml|json)[ \t]*$/i);
+    if (!opening) {
+      return false;
+    }
+    const fenceCharacter = opening[1][0];
+    const minimumLength = opening[1].length;
+    for (let index = 1; index < lines.length; index += 1) {
+      const closing = lines[index].trim();
+      if (closing.length >= minimumLength && closing.split("").every((character) => character === fenceCharacter)) {
+        return lines.slice(index + 1).every((line) => line.trim() === "");
+      }
+    }
+    return false;
+  }
+  function isDirectFrontmatter(markdown) {
+    const yaml = extractLeadingYamlFrontmatter(markdown);
+    if (yaml && yaml.bodyMarkdown.trim() === "") {
+      return true;
+    }
+    const json = extractLeadingJsonFrontmatter(markdown);
+    return json !== null && json.bodyMarkdown.trim() === "";
+  }
+  function canonicalBlockRepresentsFrontmatter(block2) {
+    return normalizeCanonicalKind(block2.kind) === "frontmatter" || isFencedFrontmatter(block2.markdown) || isDirectFrontmatter(block2.markdown);
+  }
+  function canonicalKindForBlock(block2, isLeadingRawFrontmatter) {
+    if (isLeadingRawFrontmatter && canonicalBlockRepresentsFrontmatter(block2)) {
+      return "frontmatter";
+    }
+    const requestedKind = normalizeCanonicalKind(block2.kind);
+    if (requestedKind === null) {
+      return {
+        code: FEEDBACK_ANCHOR_ERROR_CODE,
+        reason: "invalid-canonical-block",
+        detail: `Block ordinal ${block2.ordinal} has unsupported kind ${JSON.stringify(block2.kind)}.`
+      };
+    }
+    const parsedBlocks = parseTopLevelBlocks(block2.markdown, 0);
+    if (!Array.isArray(parsedBlocks)) {
+      return {
+        ...parsedBlocks,
+        reason: "invalid-canonical-block",
+        detail: `Block ordinal ${block2.ordinal} could not be parsed: ${parsedBlocks.detail}`
+      };
+    }
+    if (parsedBlocks.length === 0 && requestedKind === "html") {
+      return null;
+    }
+    if (parsedBlocks.length !== 1) {
+      return {
+        code: FEEDBACK_ANCHOR_ERROR_CODE,
+        reason: "invalid-canonical-block",
+        detail: `Block ordinal ${block2.ordinal} produced ${parsedBlocks.length} top-level Markdown blocks.`
+      };
+    }
+    const parsedKind = parsedBlocks[0].kind;
+    if (requestedKind !== parsedKind) {
+      return {
+        code: FEEDBACK_ANCHOR_ERROR_CODE,
+        reason: "invalid-canonical-block",
+        detail: `Block ordinal ${block2.ordinal} declares ${requestedKind} but serializes as ${parsedKind}.`
+      };
+    }
+    return parsedKind;
+  }
+  function canonicalRequestsJsonFrontmatter(block2) {
+    if (!block2) {
+      return false;
+    }
+    if (normalizeCanonicalKind(block2.kind) === "frontmatter") {
+      return true;
+    }
+    return /^([`~]{3,})[ \t]*json[ \t]*(?:\r?\n)/i.test(block2.markdown);
+  }
+  function isBlankLine(line) {
+    return (line ?? "").trim() === "";
+  }
+  function findUnparsedBlockLines(sourceLines, markdown, afterLine, beforeLine) {
+    let startLine = afterLine + 1;
+    while (startLine < beforeLine && isBlankLine(sourceLines[startLine - 1])) startLine += 1;
+    const expected = markdown.split(/\r?\n/);
+    const endLine = startLine + expected.length - 1;
+    if (endLine >= beforeLine) return null;
+    return expected.every(
+      (line, index) => (sourceLines[startLine - 1 + index] ?? "").trim() === line.trim()
+    ) ? { startLine, endLine } : null;
+  }
+  function buildFeedbackAnchorMap(rawMarkdown, canonicalBlocks) {
+    if (hasThreeSpaceOrderedListRoot(rawMarkdown)) {
+      return failure(
+        "invalid-canonical-block",
+        "Three-space ordered-list roots cannot be anchored safely across parser dialects."
+      );
+    }
+    for (let index = 0; index < canonicalBlocks.length; index += 1) {
+      const current = canonicalBlocks[index];
+      const previous = canonicalBlocks[index - 1];
+      if (!Number.isInteger(current.ordinal) || current.ordinal < 0 || previous !== void 0 && current.ordinal <= previous.ordinal) {
+        return failure(
+          "invalid-canonical-order",
+          "Canonical block ordinals must be unique, non-negative integers in document order."
+        );
+      }
+    }
+    const yamlFrontmatter = extractLeadingYamlFrontmatter(rawMarkdown);
+    const jsonFrontmatter = canonicalRequestsJsonFrontmatter(canonicalBlocks[0]) ? extractLeadingJsonFrontmatter(rawMarkdown) : null;
+    const frontmatter = yamlFrontmatter ?? jsonFrontmatter;
+    const rawBlocks = [];
+    if (frontmatter) {
+      rawBlocks.push({ kind: "frontmatter", startLine: 1, endLine: frontmatter.endLine });
+    }
+    const parsedBody = parseTopLevelBlocks(
+      frontmatter?.bodyMarkdown ?? rawMarkdown,
+      frontmatter?.bodyLineOffset ?? 0
+    );
+    if (!Array.isArray(parsedBody)) {
+      return { ok: false, error: parsedBody };
+    }
+    rawBlocks.push(...parsedBody);
+    const canonicalKinds = [];
+    let parsedCanonicalCount = 0;
+    for (let index = 0; index < canonicalBlocks.length; index += 1) {
+      const kind = canonicalKindForBlock(canonicalBlocks[index], frontmatter !== null && index === 0);
+      if (kind !== null && typeof kind !== "string") {
+        return { ok: false, error: kind };
+      }
+      if (kind !== null) parsedCanonicalCount += 1;
+      canonicalKinds.push(kind);
+    }
+    if (parsedCanonicalCount !== rawBlocks.length) {
+      return failure(
+        "block-count-mismatch",
+        `Canonical block count ${parsedCanonicalCount} does not match raw block count ${rawBlocks.length}.`
+      );
+    }
+    const sourceLines = parsedCanonicalCount === canonicalKinds.length ? [] : rawMarkdown.split(/\r?\n/);
+    const unmatched = (ordinal) => failure(
+      "invalid-canonical-block",
+      `Block ordinal ${ordinal} has no parsed Markdown block and does not match the source lines between its neighbors.`
+    );
+    const blocks = [];
+    let rawIndex = 0;
+    let openUnparsedOrdinal = null;
+    for (let index = 0; index <= canonicalKinds.length; index += 1) {
+      const canonicalBlock = canonicalBlocks[index];
+      const previousEndLine = blocks[blocks.length - 1]?.endLine ?? 0;
+      const nextStartLine = rawBlocks[rawIndex]?.startLine ?? sourceLines.length + 1;
+      if (canonicalBlock !== void 0 && canonicalKinds[index] === null) {
+        const lines = findUnparsedBlockLines(
+          sourceLines,
+          canonicalBlock.markdown,
+          previousEndLine,
+          nextStartLine
+        );
+        if (lines === null) return unmatched(canonicalBlock.ordinal);
+        blocks.push({ ordinal: canonicalBlock.ordinal, kind: "html", ...lines });
+        openUnparsedOrdinal = canonicalBlock.ordinal;
+        continue;
+      }
+      if (openUnparsedOrdinal !== null) {
+        for (let line = previousEndLine + 1; line < nextStartLine; line += 1) {
+          if (!isBlankLine(sourceLines[line - 1])) return unmatched(openUnparsedOrdinal);
+        }
+        openUnparsedOrdinal = null;
+      }
+      if (canonicalBlock === void 0) break;
+      const canonicalKind = canonicalKinds[index];
+      const rawBlock = rawBlocks[rawIndex];
+      rawIndex += 1;
+      if (canonicalKind !== rawBlock.kind) {
+        return failure(
+          "block-kind-mismatch",
+          `Block ordinal ${canonicalBlock.ordinal} is ${canonicalKind} in the canonical snapshot but ${rawBlock.kind} in the raw source.`
+        );
+      }
+      blocks.push({
+        ordinal: canonicalBlock.ordinal,
+        kind: canonicalKind,
+        startLine: rawBlock.startLine,
+        endLine: rawBlock.endLine
+      });
+    }
+    return { ok: true, map: { blocks } };
+  }
+
+  // src/shim/stubs/crypto.ts
+  function createHash() {
+    throw new Error("Hashing is not available in the editor page.");
+  }
+
+  // .upstream/markdown-for-humans/src/editor/feedbackSnapshotService.ts
+  var MAX_DOCUMENT_URI_LENGTH = 32 * 1024;
+  var MAX_SOURCE_BYTES = 64 * 1024 * 1024;
+  var markdownParser2 = new lib_default({
+    html: true,
+    breaks: false,
+    linkify: false
+  });
+  function computeFeedbackTextSha256(sourceText) {
+    return createHash("sha256").update(sourceText, "utf8").digest("hex");
+  }
+  function normalizeRenderedHtml2(html) {
+    const verbatimPattern = /<(pre|code)\b[\s\S]*?<\/\1>/gi;
+    const parts = [];
+    let cursor = 0;
+    let match2;
+    while ((match2 = verbatimPattern.exec(html)) !== null) {
+      parts.push(html.slice(cursor, match2.index).replace(/\s+/g, " "));
+      parts.push(match2[0]);
+      cursor = match2.index + match2[0].length;
+    }
+    parts.push(html.slice(cursor).replace(/\s+/g, " "));
+    return parts.join("").trim();
+  }
+  function normalizeLineEndings(markdown) {
+    return markdown.replace(/\r\n?/g, "\n").replace(/\n+$/g, "");
+  }
+  function frontmatterPayload(markdown) {
+    const normalized = normalizeLineEndings(markdown);
+    const lines = normalized.split("\n");
+    const opening = lines[0]?.match(/^(`{3,}|~{3,})[ \t]*(yaml|yml|json)[ \t]*$/i);
+    if (opening && lines.length >= 3) {
+      const fence2 = opening[1];
+      const closingPattern = fence2[0] === "`" ? new RegExp("^`{" + fence2.length + ",}[ \\t]*$") : new RegExp(`^~{${fence2.length},}[ \\t]*$`);
+      if (closingPattern.test(lines[lines.length - 1])) {
+        const format3 = opening[2].toLowerCase() === "json" ? "json" : "yaml";
+        return `${format3}\0${lines.slice(1, -1).join("\n")}`;
+      }
+    }
+    const format2 = normalized.startsWith("{") ? "json" : "yaml";
+    return `${format2}\0${normalized}`;
+  }
+  function semanticBlockPayload(kind, markdown, references) {
+    if (kind === "frontmatter") return frontmatterPayload(markdown);
+    try {
+      const rendered = normalizeRenderedHtml2(
+        markdownParser2.render(markdown, references && { references })
+      );
+      return rendered === "" ? markdown.replace(/[ \t]*\r?\n[ \t]*/g, "\n").trim() : rendered;
+    } catch {
+      return null;
+    }
+  }
+  function blockFingerprint(kind, markdown, references) {
+    const payload = semanticBlockPayload(kind, markdown, references);
+    if (payload === null) return null;
+    return computeFeedbackTextSha256(`${kind}\0${payload}`);
+  }
+  function equivalentBlockFingerprint(kind, sourceMarkdown, canonicalMarkdown, references) {
+    const sourceFingerprint = blockFingerprint(kind, sourceMarkdown, references);
+    const canonicalFingerprint = blockFingerprint(kind, canonicalMarkdown);
+    if (sourceFingerprint === null || canonicalFingerprint === null || sourceFingerprint !== canonicalFingerprint && (kind === "frontmatter" || !isMarkdownRendererEquivalent(sourceMarkdown, canonicalMarkdown, references))) {
+      return null;
+    }
+    return canonicalFingerprint;
+  }
+  function isFeedbackBlockContentEquivalent(kind, sourceMarkdown, canonicalMarkdown, references) {
+    return equivalentBlockFingerprint(kind, sourceMarkdown, canonicalMarkdown, references) !== null;
+  }
+  function collectMarkdownReferences(sourceText) {
+    const environment = {};
+    markdownParser2.render(sourceText, environment);
+    return environment.references;
+  }
+
+  // .upstream/markdown-for-humans/src/editor/aiReference.ts
+  var markdownParser3 = new lib_default({ html: true, breaks: false, linkify: false });
+  var TOKEN_KINDS = {
+    paragraph_open: "paragraph",
+    heading_open: "heading",
+    bullet_list_open: "list",
+    ordered_list_open: "list",
+    list_item_open: "item",
+    blockquote_open: "blockquote",
+    table_open: "table",
+    tr_open: "row",
+    fence: "code",
+    code_block: "code"
+  };
+  var ANCHOR_KINDS = {
+    frontmatter: "other",
+    paragraph: "paragraph",
+    heading: "heading",
+    list: "list",
+    blockquote: "blockquote",
+    code: "code",
+    table: "table",
+    thematicBreak: "other",
+    html: "other"
+  };
+  function isBlankLine2(line) {
+    return /^[\s>]*$/.test(line ?? "");
+  }
+  function codeLines(token, start) {
+    const count = token.content === "" ? 0 : token.content.replace(/\n$/, "").split("\n").length;
+    return { first: token.type === "fence" ? start + 1 : start, count };
+  }
+  function parseBlockTree(lines) {
+    const roots = [];
+    const stack = [];
+    for (const token of markdownParser3.parse(lines.join("\n"), {})) {
+      const parent = stack[stack.length - 1];
+      if (token.type === "inline") {
+        if (parent) {
+          const children = token.children ?? [];
+          parent.breaks = children.filter(
+            (child) => child.type === "softbreak" || child.type === "hardbreak"
+          ).length;
+          parent.htmlBreak = children.some(
+            (child) => child.type === "html_inline" && /^<br\b/i.test(child.content)
+          );
+        }
+        continue;
+      }
+      if (token.nesting === -1) {
+        if (TOKEN_KINDS[token.type.replace(/_close$/, "_open")]) stack.pop();
+        continue;
+      }
+      const kind = TOKEN_KINDS[token.type] ?? (token.nesting === 0 ? "other" : void 0);
+      if (kind === void 0) continue;
+      const map2 = token.map ?? (parent ? [parent.start, parent.end + 1] : [0, lines.length]);
+      const start = map2[0];
+      let end = map2[1] - 1;
+      while (end > start && isBlankLine2(lines[end])) end -= 1;
+      const node = { kind, start, end, children: [], breaks: 0, htmlBreak: false };
+      if (kind === "code") node.code = codeLines(token, start);
+      (parent ? parent.children : roots).push(node);
+      if (token.nesting === 1) stack.push(node);
+    }
+    return roots;
+  }
+  function alertChildren(node, lines) {
+    const first = node.children[0];
+    const marker = (lines[first?.start ?? -1] ?? "").replace(/^[\s>]*/, "").trim();
+    if (!first || first.kind !== "paragraph" || !/^\[!\w+\]$/.test(marker)) return null;
+    if (first.start === first.end) return node.children.slice(1);
+    return [
+      { ...first, start: first.start + 1, breaks: first.breaks - 1 },
+      ...node.children.slice(1)
+    ];
+  }
+  function lineWithin(node, line) {
+    const whole = [node.start, node.end];
+    if (!line) return whole;
+    if (node.code) {
+      if (line.count !== node.code.count) return whole;
+      return [node.code.first + line.index, node.code.first + line.index];
+    }
+    if (node.kind !== "paragraph" && node.kind !== "heading") return whole;
+    const sourceLineCount = node.end - node.start + 1;
+    if (sourceLineCount === 1) return whole;
+    if (line.count !== sourceLineCount || node.breaks !== sourceLineCount - 1 || node.htmlBreak) {
+      return whole;
+    }
+    return [node.start + line.index, node.start + line.index];
+  }
+  function isRenderless(block2) {
+    return block2.kind === "html" && markdownParser3.parse(block2.markdown, {}).length === 0;
+  }
+  var AiReferenceResolver = class {
+    constructor(sourceText, anchors, canonicalBlocks) {
+      this.sourceText = sourceText;
+      this.anchors = anchors;
+      this.spans = /* @__PURE__ */ new Map();
+      this.blocks = /* @__PURE__ */ new Map();
+      this.referencesCollected = false;
+      this.sourceLines = sourceText.split(/\r?\n/);
+      for (const span of anchors) this.spans.set(span.ordinal, span);
+      for (const block2 of canonicalBlocks) this.blocks.set(block2.ordinal, block2);
+    }
+    resolve(point) {
+      const span = this.spans.get(point.ordinal);
+      const block2 = this.blocks.get(point.ordinal);
+      if (!span || !block2) {
+        return block2 ? this.resolveMarkerBlock(block2, point) : this.resolveBlankLine(point.ordinal);
+      }
+      const lines = this.sourceLines.slice(span.startLine - 1, span.endLine);
+      if (!this.hasSameContent(span, lines, block2)) return null;
+      const [first, last] = this.resolveWithin(span, block2, lines, point);
+      return { startLine: span.startLine + first, endLine: span.startLine + last };
+    }
+    /** The touched block must still say what the rich view shows, or the view is stale. */
+    hasSameContent(span, lines, block2) {
+      if (!this.referencesCollected) {
+        this.references = collectMarkdownReferences(this.sourceText);
+        this.referencesCollected = true;
+      }
+      return isFeedbackBlockContentEquivalent(
+        span.kind,
+        lines.join("\n"),
+        block2.markdown,
+        this.references
+      );
+    }
+    /** 0-based first and last line inside one verified top-level block. */
+    resolveWithin(span, block2, lines, point) {
+      const whole = [0, lines.length - 1];
+      if (point.steps.length === 0 && !point.line) return whole;
+      if (span.kind === "frontmatter") {
+        return point.steps.length === 0 && point.line?.count === lines.length ? [point.line.index, point.line.index] : whole;
+      }
+      const roots = parseBlockTree(lines);
+      if (roots.length !== 1 || roots[0].start !== 0 || roots[0].end !== lines.length - 1 || roots[0].kind !== ANCHOR_KINDS[span.kind]) {
+        return whole;
+      }
+      let node = roots[0];
+      let viewKind = block2.kind === "alert" ? "alert" : node.kind;
+      for (const step of point.steps) {
+        if (node.kind === "row") return [node.start, node.end];
+        const children = viewKind === "alert" ? alertChildren(node, lines) : node.children;
+        const child = children?.[step.index];
+        const sourceKind = step.kind === "alert" ? "blockquote" : step.kind;
+        if (!children || children.length !== step.count || !child || child.kind !== sourceKind) {
+          return [node.start, node.end];
+        }
+        node = child;
+        viewKind = step.kind;
+      }
+      return lineWithin(node, point.line);
+    }
+    /** The anchored blocks on either side of a top-level node that has no anchor. */
+    neighbors(ordinal) {
+      let previous;
+      for (const span of this.anchors) {
+        if (span.ordinal > ordinal) return { previous, next: span };
+        previous = span;
+      }
+      return { previous };
+    }
+    /**
+     * A block that renders nothing, such as link reference definitions. The
+     * rich view shows its source text, so it is exact when that text is all
+     * there is between the neighboring blocks.
+     */
+    resolveMarkerBlock(block2, point) {
+      const { previous, next } = this.neighbors(block2.ordinal);
+      let startLine = (previous?.endLine ?? 0) + 1;
+      let endLine = (next?.startLine ?? this.sourceLines.length + 1) - 1;
+      while (startLine <= endLine && (this.sourceLines[startLine - 1] ?? "").trim() === "") {
+        startLine += 1;
+      }
+      while (endLine >= startLine && (this.sourceLines[endLine - 1] ?? "").trim() === "") {
+        endLine -= 1;
+      }
+      if (this.sourceLines.slice(startLine - 1, endLine).join("\n") !== block2.markdown) return null;
+      if (point.steps.length === 0 && point.line?.count === endLine - startLine + 1) {
+        return { startLine: startLine + point.line.index, endLine: startLine + point.line.index };
+      }
+      return { startLine, endLine };
+    }
+    /**
+     * A caret in an empty top-level paragraph, which the rich view shows for an
+     * extra blank line. Empty paragraphs have no anchor, so use the blank lines
+     * between the nearest anchored blocks.
+     */
+    resolveBlankLine(ordinal) {
+      const { previous, next } = this.neighbors(ordinal);
+      if (!previous || !next) return null;
+      const startLine = previous.endLine + 1;
+      const endLine = next.startLine - 1;
+      for (let line = startLine; line <= endLine; line += 1) {
+        if ((this.sourceLines[line - 1] ?? "").trim() !== "") return null;
+      }
+      if (endLine < startLine) return null;
+      const emptyParagraphs = next.ordinal - previous.ordinal - 1;
+      if (endLine - startLine === emptyParagraphs) {
+        const line = startLine + (ordinal - previous.ordinal);
+        return { startLine: line, endLine: line };
+      }
+      return { startLine, endLine };
+    }
+  };
+  function resolveAiReferenceLines(sourceText, canonicalBlocks, selection2) {
+    const anchors = buildFeedbackAnchorMap(
+      sourceText,
+      canonicalBlocks.filter((block2) => !isRenderless(block2))
+    );
+    if (!anchors.ok) return null;
+    const resolver = new AiReferenceResolver(sourceText, anchors.map.blocks, canonicalBlocks);
+    const start = resolver.resolve(selection2.start);
+    const end = selection2.end === selection2.start ? start : resolver.resolve(selection2.end);
+    if (!start || !end) return null;
+    return { startLine: start.startLine, endLine: Math.max(start.startLine, end.endLine) };
+  }
+  function formatAiReference(path, range) {
+    let target = path;
+    if (range) {
+      target += range.startLine === range.endLine ? `#L${range.startLine}` : `#L${range.startLine}-${range.endLine}`;
+    }
+    return /\s/.test(path) ? `@"${target}"` : `@${target}`;
+  }
+
+  // .upstream/markdown-for-humans/src/shared/feedbackSnapshotProtocol.ts
+  var MAX_SOURCE_LENGTH = 64 * 1024 * 1024;
+  var MAX_BLOCKS = 1e5;
+  var MAX_BLOCK_KIND_LENGTH = 128;
+  var TABLE_FINGERPRINT_PATTERN = /^md4h-table\/v1:[a-f0-9]{16}$/;
+  function isRecord(value) {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+  }
+  function hasExactKeys(record, expected) {
+    const actual = Object.keys(record).sort();
+    const sortedExpected = [...expected].sort();
+    return actual.length === sortedExpected.length && actual.every((key, index) => key === sortedExpected[index]);
+  }
+  function isRevision(value) {
+    return Number.isSafeInteger(value) && value >= 0;
+  }
+  function parseCanonicalFeedbackBlocks(value) {
+    if (!Array.isArray(value) || value.length === 0 || value.length > MAX_BLOCKS) return null;
+    let previousOrdinal = -1;
+    let totalMarkdownLength = 0;
+    const blocks = [];
+    for (const candidate of value) {
+      const hasTableFingerprint = isRecord(candidate) && Object.prototype.hasOwnProperty.call(candidate, "tableFingerprint");
+      if (!isRecord(candidate) || !hasExactKeys(candidate, [
+        "ordinal",
+        "kind",
+        "markdown",
+        "contentSize",
+        ...hasTableFingerprint ? ["tableFingerprint"] : []
+      ]) || !isRevision(candidate.ordinal) || candidate.ordinal <= previousOrdinal || typeof candidate.kind !== "string" || candidate.kind.length === 0 || candidate.kind.length > MAX_BLOCK_KIND_LENGTH || typeof candidate.markdown !== "string" || !isRevision(candidate.contentSize) || hasTableFingerprint && (candidate.kind !== "table" || typeof candidate.tableFingerprint !== "string" || !TABLE_FINGERPRINT_PATTERN.test(candidate.tableFingerprint))) {
+        return null;
+      }
+      totalMarkdownLength += candidate.markdown.length;
+      if (totalMarkdownLength > MAX_SOURCE_LENGTH) return null;
+      previousOrdinal = candidate.ordinal;
+      blocks.push({
+        ordinal: candidate.ordinal,
+        kind: candidate.kind,
+        markdown: candidate.markdown,
+        contentSize: candidate.contentSize,
+        ...hasTableFingerprint ? { tableFingerprint: candidate.tableFingerprint } : {}
+      });
+    }
+    return blocks;
+  }
+
+  // .upstream/markdown-for-humans/src/shared/aiReferenceProtocol.ts
+  var MAX_STEPS = 64;
+  var NODE_KINDS = {
+    paragraph: "paragraph",
+    heading: "heading",
+    bulletList: "list",
+    orderedList: "list",
+    taskList: "list",
+    listItem: "item",
+    taskItem: "item",
+    blockquote: "blockquote",
+    githubAlert: "alert",
+    codeBlock: "code",
+    table: "table",
+    tableRow: "row"
+  };
+  var KNOWN_KINDS = /* @__PURE__ */ new Set([...Object.values(NODE_KINDS), "other"]);
+  function isRecord2(value) {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+  }
+  function isIndexWithin(index, count) {
+    return Number.isSafeInteger(index) && Number.isSafeInteger(count) && index >= 0 && index < count;
+  }
+  function parsePoint(value) {
+    if (!isRecord2(value) || !Number.isSafeInteger(value.ordinal) || value.ordinal < 0 || !Array.isArray(value.steps) || value.steps.length > MAX_STEPS) {
+      return null;
+    }
+    const steps = [];
+    for (const step of value.steps) {
+      if (!isRecord2(step) || typeof step.kind !== "string" || !KNOWN_KINDS.has(step.kind) || !isIndexWithin(step.index, step.count)) {
+        return null;
+      }
+      steps.push({
+        kind: step.kind,
+        index: step.index,
+        count: step.count
+      });
+    }
+    const point = { ordinal: value.ordinal, steps };
+    if (value.line !== void 0) {
+      if (!isRecord2(value.line) || !isIndexWithin(value.line.index, value.line.count)) return null;
+      point.line = { index: value.line.index, count: value.line.count };
+    }
+    return point;
+  }
+  function parseAiReferenceSelection(value) {
+    if (!isRecord2(value)) return null;
+    const start = parsePoint(value.start);
+    const end = parsePoint(value.end);
+    if (!start || !end) return null;
+    return { start, end };
+  }
+  function parseAiReferenceRequest(value) {
+    if (!isRecord2(value) || value.type !== "copyReferenceForAi" || !isRecord2(value.selection)) {
+      return null;
+    }
+    const selection2 = parseAiReferenceSelection(value.selection);
+    const blocks = Array.isArray(value.blocks) && value.blocks.length === 0 ? [] : parseCanonicalFeedbackBlocks(value.blocks);
+    if (!selection2 || !blocks) return null;
+    return { type: "copyReferenceForAi", selection: selection2, blocks };
+  }
+
+  // src/shim/reference.ts
+  function buildReference(message, sourceText, path) {
+    const request = parseAiReferenceRequest(message);
+    if (!request) return null;
+    let lines = null;
+    try {
+      lines = resolveAiReferenceLines(sourceText, request.blocks, request.selection);
+    } catch {
+      lines = null;
+    }
+    return { reference: formatAiReference(path, lines), exact: lines !== null };
+  }
+
+  // src/shim/viewState.ts
+  var KEY = "views";
+  var MAX_ENTRIES = 60;
+  var WRITE_DELAY_MS = 700;
+  var isEntry = (value) => {
+    const entry = value;
+    return typeof entry === "object" && entry !== null && Array.isArray(entry.v) && entry.v.length === 3 && entry.v.every((item) => typeof item === "number" && Number.isFinite(item) && item >= 0) && typeof entry.t === "number";
+  };
+  var readMap = (value) => {
+    const map2 = /* @__PURE__ */ new Map();
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return map2;
+    for (const [key, entry] of Object.entries(value)) {
+      if (isEntry(entry)) map2.set(key, entry);
+    }
+    return map2;
+  };
+  var initialViewState = (documentVersion) => ({
+    version: 1,
+    documentVersion,
+    selection: { from: 0, to: 0 },
+    scrollTop: 0
+  });
+  function isEditorViewState(value) {
+    const state = value;
+    return typeof state === "object" && state !== null && state.version === 1 && typeof state.scrollTop === "number" && typeof state.selection === "object" && state.selection !== null && typeof state.selection.from === "number" && typeof state.selection.to === "number";
+  }
+  var ViewStateKeeper = class {
+    constructor(store) {
+      this.store = store;
+    }
+    store;
+    timer;
+    pending = null;
+    /**
+     * The saved place for a file, as a state the editor will accept for `documentVersion`.
+     *
+     * @param id - identifies the file: its project folder and path
+     * @returns null when nothing is stored, or the store could not be read
+     */
+    async load(id, documentVersion) {
+      try {
+        const entry = readMap(await this.store.get(KEY)).get(id);
+        if (!entry) return null;
+        const [from, to, scrollTop] = entry.v;
+        return { version: 1, documentVersion, selection: { from: Math.min(from, to), to: Math.max(from, to) }, scrollTop };
+      } catch {
+        return null;
+      }
+    }
+    /** Remember the place. Written after a short pause, so scrolling does not flood the store. */
+    remember(id, state) {
+      this.pending = {
+        id,
+        entry: { v: [Math.trunc(state.selection.from), Math.trunc(state.selection.to), Math.round(state.scrollTop)], t: Math.floor(Date.now() / 1e3) }
+      };
+      if (this.timer === void 0) this.timer = setTimeout(() => void this.flush(), WRITE_DELAY_MS);
+    }
+    /** Write now what `remember` is holding. */
+    async flush() {
+      if (this.timer !== void 0) clearTimeout(this.timer);
+      this.timer = void 0;
+      const pending = this.pending;
+      this.pending = null;
+      if (!pending) return;
+      try {
+        const map2 = readMap(await this.store.get(KEY));
+        map2.delete(pending.id);
+        map2.set(pending.id, pending.entry);
+        const newest = [...map2].sort((a, b) => b[1].t - a[1].t).slice(0, MAX_ENTRIES);
+        await this.store.set(KEY, Object.fromEntries(newest));
+      } catch {
+      }
+    }
+  };
+
   // src/shim/index.ts
   var SYNC_PROTOCOL = 2;
   var BLANK_LINE_MODE = "preserve";
   var FLUSH_TIMEOUT_MS = 3e3;
   var SETTLE_IDLE_MS = 1200;
+  var VIEW_STATE_WAIT_MS = 700;
   var TRANSLATIONS = { es: "es", ja: "ja", "pt-br": "pt-br", pt: "pt-br", ru: "ru", "zh-cn": "zh-cn", zh: "zh-cn" };
   var host = connectHost();
   window.addEventListener("message", (event) => {
@@ -7971,13 +9703,45 @@ ${GUEST_UI_LOOK_CSS}`;
     readFile: (path) => host.readFile(path),
     folder
   });
+  var fileIndex = new FileIndex({ listDir: (path) => host.listDir(path) });
+  var storageScope = () => context?.features?.deviceStorage === true ? { scope: "device" } : void 0;
+  var views = new ViewStateKeeper({
+    get: (key) => host.storage.get(key, storageScope()),
+    set: (key, value) => host.storage.set(key, value, storageScope())
+  });
+  var viewId = () => file ? `${context?.directory ?? ""}|${file.path}` : null;
+  var nativeClipboard = navigator.clipboard;
+  var CLIPBOARD_HOST_MAX = 32e3;
+  try {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: async (text2) => {
+          if (text2.length <= CLIPBOARD_HOST_MAX) {
+            try {
+              await host.writeClipboard(text2);
+              return;
+            } catch {
+            }
+          }
+          if (!nativeClipboard?.writeText) throw new Error("The clipboard is not available.");
+          await nativeClipboard.writeText(text2);
+        },
+        readText: () => nativeClipboard?.readText ? nativeClipboard.readText() : Promise.reject(new Error("The clipboard is not available."))
+      }
+    });
+  } catch (error2) {
+    log("clipboard not rerouted", error2);
+  }
   var applyTheme = (ready) => {
     applyHostReady(ready, document.documentElement);
     const dark = ready.theme.mode === "dark";
     document.body.classList.toggle("vscode-dark", dark);
     document.body.classList.toggle("vscode-light", !dark);
+    document.body.classList.toggle("vm-theme-tick");
     document.documentElement.lang = ready.locale || "en";
   };
+  window.visualMarkdownMermaidTheme = () => context ? mermaidThemeFor(context.theme.mode === "dark" ? "dark" : "light", context.theme.tokens) : null;
   var loadTranslations = async (locale) => {
     const key = locale.toLowerCase();
     const name = TRANSLATIONS[key] ?? TRANSLATIONS[key.split("-")[0]];
@@ -8008,6 +9772,8 @@ ${GUEST_UI_LOOK_CSS}`;
   var applyReadOnly = () => {
     const readOnly = file?.readOnly === true;
     document.body.classList.toggle("vm-readonly", readOnly);
+    const chip = document.querySelector("#vm-readonly");
+    if (chip) chip.hidden = !readOnly;
     const instance = editorInstance();
     if (instance && instance.isEditable === readOnly) instance.setEditable(!readOnly);
   };
@@ -8031,9 +9797,32 @@ ${GUEST_UI_LOOK_CSS}`;
       blankLineMode: BLANK_LINE_MODE,
       enableMath: true
     });
+    const bridge = window.visualMarkdownEditor;
+    try {
+      doc.setOrigin(bridge?.describeBlocks() ?? null, bridge ? (candidate, alternative) => bridge.matchesDocument(candidate, alternative) : null);
+    } catch (error2) {
+      log("style keeping is off for this file", error2);
+      doc.setOrigin(null, null);
+    }
     applyReadOnly();
+    adaptToolbar();
     showNotice(null);
   };
+  var toolbarAdapted = false;
+  function adaptToolbar() {
+    const toolbar = document.querySelector(".formatting-toolbar");
+    if (toolbarAdapted || !toolbar) return;
+    toolbarAdapted = true;
+    const reference2 = toolbar.querySelector(".copy-reference-button");
+    if (reference2) {
+      const label = "Add to chat as @file#L10-14";
+      reference2.title = label;
+      reference2.setAttribute("aria-label", label);
+    }
+    const measure = () => document.documentElement.style.setProperty("--vm-toolbar-height", `${toolbar.offsetHeight}px`);
+    measure();
+    new ResizeObserver(measure).observe(toolbar);
+  }
   var flushEditor = () => {
     if (!doc || viewGeneration === null) return Promise.resolve(true);
     const requestId = `vm-flush-${flushSequence += 1}`;
@@ -8091,6 +9880,42 @@ ${GUEST_UI_LOOK_CSS}`;
     const path = resolveProjectPath(folder(), target) ?? cleanTarget(target);
     void host.writeClipboard(path).then(() => toast("info", `Copied path: ${path}`)).catch(() => void 0);
   };
+  var targetExists = async (target) => {
+    const path = resolveProjectPath(folder(), target);
+    if (path === null) return true;
+    try {
+      return (await host.stat(path)).kind !== "missing";
+    } catch {
+      return true;
+    }
+  };
+  var addReferenceToChat = async (message) => {
+    const reply = (ok, text2) => toEditor({ type: "copyReferenceForAi.result", ok, message: text2 });
+    if (!doc || !file) {
+      reply(false, "The file has not finished loading.");
+      return;
+    }
+    await flushEditor();
+    doc.settle();
+    const built = buildReference(message, doc.text, file.path.replace(/\\/g, "/"));
+    if (!built) {
+      reply(false, "Could not make a reference for this spot.");
+      return;
+    }
+    if (doc.dirty && !file.readOnly) host.requestFileSave();
+    const suffix = built.exact ? "" : ", without line numbers";
+    try {
+      await host.compose({ text: `${built.reference} `, mode: "append" });
+      reply(true, `Added ${built.reference} to the chat${suffix}`);
+    } catch {
+      try {
+        await host.writeClipboard(built.reference);
+        reply(true, `Copied ${built.reference}${suffix}`);
+      } catch {
+        reply(false, "Could not add a reference to the chat.");
+      }
+    }
+  };
   var fromEditor = (message) => {
     const type = typeof message.type === "string" ? message.type : "";
     switch (type) {
@@ -8140,10 +9965,15 @@ ${GUEST_UI_LOOK_CSS}`;
         toast("error", String(message.message ?? "Something went wrong."));
         return;
       case "searchFiles":
-        toEditor({ type: "fileSearchResults", results: [], requestId: message.requestId });
+        void fileIndex.search(String(message.query ?? ""), message.filters ?? { all: true }, folder() ?? "").catch(() => []).then((results) => toEditor({ type: "fileSearchResults", results, requestId: message.requestId }));
         return;
       case "auditCheckFile":
-        toEditor({ type: "auditCheckFileResult", requestId: message.requestId, exists: true });
+        void targetExists(String(message.relativePath ?? "")).then((exists) => {
+          toEditor({ type: "auditCheckFileResult", requestId: message.requestId, exists });
+        });
+        return;
+      case "copyReferenceForAi":
+        void addReferenceToChat(message);
         return;
       case "auditCheckUrl":
         toEditor({ type: "auditCheckUrlResult", requestId: message.requestId, reachable: true });
@@ -8166,13 +9996,21 @@ ${GUEST_UI_LOOK_CSS}`;
     getState: () => viewState,
     setState: (state) => {
       viewState = state;
+      const id = viewId();
+      if (id !== null && isEditorViewState(state)) views.remember(id, state);
     }
   };
+  window.addEventListener("pagehide", () => void views.flush());
   window.acquireVsCodeApi = () => api;
   var loadEditor = async () => {
     if (editorRequested || !context || !doc) return;
     editorRequested = true;
-    await loadTranslations(context.locale);
+    const id = viewId();
+    const [stored] = await Promise.all([
+      id === null ? null : Promise.race([views.load(id, doc.version), new Promise((resolve) => window.setTimeout(() => resolve(null), VIEW_STATE_WAIT_MS))]),
+      loadTranslations(context.locale)
+    ]);
+    viewState = stored ?? initialViewState(doc.version);
     const script = document.createElement("script");
     script.src = "webview.js";
     script.addEventListener("error", () => showNotice("Visual Markdown could not load its editor. Use the source view for this file."));

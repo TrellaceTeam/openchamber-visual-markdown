@@ -25,7 +25,8 @@ const currentCommit = () => {
 
 if (currentCommit() !== pin.commit) {
   if (existsSync(target)) rmSync(target, { recursive: true, force: true });
-  run('git', ['-c', 'core.autocrlf=false', 'clone', '--depth', '1', '--branch', pin.tag, '--no-recurse-submodules', pin.repo, target], root);
+  // Keep upstream's own line endings on every platform, so the patches always apply.
+  run('git', ['clone', '--config', 'core.autocrlf=false', '--depth', '1', '--branch', pin.tag, '--no-recurse-submodules', pin.repo, target], root);
   const got = currentCommit();
   if (got !== pin.commit) {
     throw new Error(`Upstream tag ${pin.tag} is at ${got}, but scripts/upstream.json pins ${pin.commit}. Review the change before updating the pin.`);

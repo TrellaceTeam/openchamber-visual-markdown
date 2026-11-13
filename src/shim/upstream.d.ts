@@ -24,12 +24,19 @@ declare module '@upstream/shared/typographySettings' {
   export function resolveTypographySettings(config: Record<string, unknown>): TypographySettings;
 }
 
+declare module '@upstream/shared/aiReferenceProtocol' {
+  export interface AiReferenceRequest {
+    readonly selection: unknown;
+    readonly blocks: readonly unknown[];
+  }
+  export function parseAiReferenceRequest(value: unknown): AiReferenceRequest | null;
+}
+
 declare module '@upstream/editor/aiReference' {
   export interface AiReferenceLineRange {
-    readonly startLine: number;
-    readonly endLine: number;
+    startLine: number;
+    endLine: number;
   }
-  export function resolveAiReferenceLines(sourceText: string, selection: unknown, blocks: unknown): AiReferenceLineRange | null;
-  export function aiReferencePath(filePath: string, workspaceFolderPath?: string): string;
+  export function resolveAiReferenceLines(sourceText: string, canonicalBlocks: readonly unknown[], selection: unknown): AiReferenceLineRange | null;
   export function formatAiReference(path: string, range: AiReferenceLineRange | null): string;
 }

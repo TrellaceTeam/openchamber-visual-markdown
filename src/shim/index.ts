@@ -14,13 +14,24 @@ import { applyHostReady } from '@openchamber/sdk/ui';
 import type { BlankLineMode } from '@upstream/shared/blankLinePolicy';
 import { resolveTypographySettings } from '@upstream/shared/typographySettings';
 import { DocumentHost, versionOf } from './documentHost';
+import { FileIndex, type FileFilters } from './fileIndex';
 import { createImageResolver } from './images';
+import { mermaidThemeFor } from './mermaidTheme';
 import { cleanTarget, documentFolder, hasScheme, resolveProjectPath } from './paths';
+import { buildReference } from './reference';
+import type { LoadedBlock } from './styleMerge';
+import { initialViewState, isEditorViewState, ViewStateKeeper } from './viewState';
 
 declare const __VM_VERSION__: string;
 declare const __VM_UPSTREAM__: string;
 
 type EditorMessage = { readonly type?: unknown; readonly [key: string]: unknown };
+
+/** What patches/0004-host-bridge.patch publishes on `window.visualMarkdownEditor`. */
+interface EditorBridge {
+  describeBlocks: () => LoadedBlock[] | null;
+  matchesDocument: (markdown: string, alternative?: string) => boolean;
+}
 
 /** DOCUMENT_SYNC_PROTOCOL_VERSION in upstream's src/shared/documentSyncProtocol.ts. */
 const SYNC_PROTOCOL = 2;
@@ -30,6 +41,8 @@ const BLANK_LINE_MODE: BlankLineMode = 'preserve';
 const FLUSH_TIMEOUT_MS = 3000;
 /** After typing stops this long, check whether the document is back to its saved text. */
 const SETTLE_IDLE_MS = 1200;
+/** How long opening a file waits for its saved scroll position before starting at the top. */
+const VIEW_STATE_WAIT_MS = 700;
 /** Languages upstream ships translations for, by OpenChamber locale. */
 const TRANSLATIONS: Readonly<Record<string, string>> = { es: 'es', ja: 'ja', 'pt-br': 'pt-br', pt: 'pt-br', ru: 'ru', 'zh-cn': 'zh-cn', zh: 'zh-cn' };
 
@@ -83,6 +96,44 @@ const images = createImageResolver({
   folder,
 });
 
+const fileIndex = new FileIndex({ listDir: (path) => host.listDir(path) });
+
+// Scroll position and caret per file. They are a preference of this browser, so they go
+// into device storage where the app has it.
+const storageScope = (): { scope: 'device' } | undefined => (context?.features?.deviceStorage === true ? { scope: 'device' } : undefined);
+const views = new ViewStateKeeper({
+  get: (key) => host.storage.get(key, storageScope()),
+  set: (key, value) => host.storage.set(key, value as never, storageScope()),
+});
+const viewId = (): string | null => (file ? `${context?.directory ?? ''}|${file.path}` : null);
+
+// Copy buttons in the editor write to the clipboard themselves. A sandboxed frame is not
+// always allowed to, so they go through OpenChamber first, which is.
+const nativeClipboard: Clipboard | undefined = navigator.clipboard;
+const CLIPBOARD_HOST_MAX = 32_000;
+try {
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: {
+      writeText: async (text: string): Promise<void> => {
+        if (text.length <= CLIPBOARD_HOST_MAX) {
+          try {
+            await host.writeClipboard(text);
+            return;
+          } catch {
+            // Fall through to the browser's own clipboard.
+          }
+        }
+        if (!nativeClipboard?.writeText) throw new Error('The clipboard is not available.');
+        await nativeClipboard.writeText(text);
+      },
+      readText: (): Promise<string> => (nativeClipboard?.readText ? nativeClipboard.readText() : Promise.reject(new Error('The clipboard is not available.'))),
+    },
+  });
+} catch (error) {
+  log('clipboard not rerouted', error);
+}
+
 // ---------------------------------------------------------------------------------------
 // Theme and language
 // ---------------------------------------------------------------------------------------
@@ -92,8 +143,15 @@ const applyTheme = (ready: HostReadyContext): void => {
   const dark = ready.theme.mode === 'dark';
   document.body.classList.toggle('vscode-dark', dark);
   document.body.classList.toggle('vscode-light', !dark);
+  // Diagrams are drawn again when the body's classes change and the colours differ. A
+  // change from one light theme to another flips neither class above, so flip this one.
+  document.body.classList.toggle('vm-theme-tick');
   document.documentElement.lang = ready.locale || 'en';
 };
+
+// Diagrams take their colours from the app's theme (patches/0003-host-mermaid-theme.patch).
+(window as unknown as { visualMarkdownMermaidTheme: () => unknown }).visualMarkdownMermaidTheme = () =>
+  context ? mermaidThemeFor(context.theme.mode === 'dark' ? 'dark' : 'light', context.theme.tokens as unknown as Record<string, string | undefined>) : null;
 
 const loadTranslations = async (locale: string): Promise<void> => {
   const key = locale.toLowerCase();
@@ -134,6 +192,8 @@ const editorInstance = (): { setEditable: (editable: boolean) => void; isEditabl
 const applyReadOnly = (): void => {
   const readOnly = file?.readOnly === true;
   document.body.classList.toggle('vm-readonly', readOnly);
+  const chip = document.querySelector<HTMLElement>('#vm-readonly');
+  if (chip) chip.hidden = !readOnly;
   const instance = editorInstance();
   if (instance && instance.isEditable === readOnly) instance.setEditable(!readOnly);
 };
@@ -159,9 +219,37 @@ const sendUpdate = (force: boolean): void => {
     enableMath: true,
   });
   // The editor builds itself inside that call the first time, so it exists by now.
+  // Ask it how it would write each block, so an edit can keep the file's own style.
+  const bridge = (window as unknown as { visualMarkdownEditor?: EditorBridge }).visualMarkdownEditor;
+  try {
+    doc.setOrigin(bridge?.describeBlocks() ?? null, bridge ? (candidate, alternative) => bridge.matchesDocument(candidate, alternative) : null);
+  } catch (error) {
+    log('style keeping is off for this file', error);
+    doc.setOrigin(null, null);
+  }
   applyReadOnly();
+  adaptToolbar();
   showNotice(null);
 };
+
+/** Name the editor's buttons for what they do in OpenChamber, and tell the page how tall the toolbar is. */
+let toolbarAdapted = false;
+function adaptToolbar(): void {
+  const toolbar = document.querySelector<HTMLElement>('.formatting-toolbar');
+  if (toolbarAdapted || !toolbar) return;
+  toolbarAdapted = true;
+
+  const reference = toolbar.querySelector<HTMLElement>('.copy-reference-button');
+  if (reference) {
+    const label = 'Add to chat as @file#L10-14';
+    reference.title = label;
+    reference.setAttribute('aria-label', label);
+  }
+
+  const measure = (): void => document.documentElement.style.setProperty('--vm-toolbar-height', `${toolbar.offsetHeight}px`);
+  measure();
+  new ResizeObserver(measure).observe(toolbar);
+}
 
 /** Ask the editor for the text it has not sent yet, and wait until it has sent it. */
 const flushEditor = (): Promise<boolean> => {
@@ -237,6 +325,48 @@ const copyFilePath = (target: string): void => {
     .catch(() => undefined);
 };
 
+/** Whether a link or image target written in the document points at something that exists. */
+const targetExists = async (target: string): Promise<boolean> => {
+  const path = resolveProjectPath(folder(), target);
+  // A target outside the project cannot be checked from here, so it is not called broken.
+  if (path === null) return true;
+  try {
+    return (await host.stat(path)).kind !== 'missing';
+  } catch {
+    return true;
+  }
+};
+
+/** Put a reference to the caret's lines into the chat box, saving first so the lines match the file. */
+const addReferenceToChat = async (message: EditorMessage): Promise<void> => {
+  const reply = (ok: boolean, text: string): void => toEditor({ type: 'copyReferenceForAi.result', ok, message: text });
+  if (!doc || !file) {
+    reply(false, 'The file has not finished loading.');
+    return;
+  }
+  await flushEditor();
+  doc.settle();
+  const built = buildReference(message, doc.text, file.path.replace(/\\/g, '/'));
+  if (!built) {
+    reply(false, 'Could not make a reference for this spot.');
+    return;
+  }
+  // The agent reads the file from disk, so what is on screen has to be there.
+  if (doc.dirty && !file.readOnly) host.requestFileSave();
+  const suffix = built.exact ? '' : ', without line numbers';
+  try {
+    await host.compose({ text: `${built.reference} `, mode: 'append' });
+    reply(true, `Added ${built.reference} to the chat${suffix}`);
+  } catch {
+    try {
+      await host.writeClipboard(built.reference);
+      reply(true, `Copied ${built.reference}${suffix}`);
+    } catch {
+      reply(false, 'Could not add a reference to the chat.');
+    }
+  }
+};
+
 const fromEditor = (message: EditorMessage): void => {
   const type = typeof message.type === 'string' ? message.type : '';
   switch (type) {
@@ -288,10 +418,18 @@ const fromEditor = (message: EditorMessage): void => {
       toast('error', String(message.message ?? 'Something went wrong.'));
       return;
     case 'searchFiles':
-      toEditor({ type: 'fileSearchResults', results: [], requestId: message.requestId });
+      void fileIndex
+        .search(String(message.query ?? ''), (message.filters ?? { all: true }) as FileFilters, folder() ?? '')
+        .catch(() => [])
+        .then((results) => toEditor({ type: 'fileSearchResults', results, requestId: message.requestId }));
       return;
     case 'auditCheckFile':
-      toEditor({ type: 'auditCheckFileResult', requestId: message.requestId, exists: true });
+      void targetExists(String(message.relativePath ?? '')).then((exists) => {
+        toEditor({ type: 'auditCheckFileResult', requestId: message.requestId, exists });
+      });
+      return;
+    case 'copyReferenceForAi':
+      void addReferenceToChat(message);
       return;
     case 'auditCheckUrl':
       toEditor({ type: 'auditCheckUrlResult', requestId: message.requestId, reachable: true });
@@ -317,8 +455,11 @@ const api = {
   getState: (): unknown => viewState,
   setState: (state: unknown): void => {
     viewState = state;
+    const id = viewId();
+    if (id !== null && isEditorViewState(state)) views.remember(id, state);
   },
 };
+window.addEventListener('pagehide', () => void views.flush());
 (window as unknown as { acquireVsCodeApi: () => typeof api }).acquireVsCodeApi = () => api;
 
 // ---------------------------------------------------------------------------------------
@@ -328,7 +469,13 @@ const api = {
 const loadEditor = async (): Promise<void> => {
   if (editorRequested || !context || !doc) return;
   editorRequested = true;
-  await loadTranslations(context.locale);
+  const id = viewId();
+  const [stored] = await Promise.all([
+    id === null ? null : Promise.race([views.load(id, doc.version), new Promise<null>((resolve) => window.setTimeout(() => resolve(null), VIEW_STATE_WAIT_MS))]),
+    loadTranslations(context.locale),
+  ]);
+  // Without a saved place the document opens at its top, with the caret there too.
+  viewState = stored ?? initialViewState(doc.version);
   const script = document.createElement('script');
   script.src = 'webview.js';
   script.addEventListener('error', () => showNotice('Visual Markdown could not load its editor. Use the source view for this file.'));

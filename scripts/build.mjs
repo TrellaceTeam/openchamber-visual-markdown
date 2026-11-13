@@ -80,7 +80,12 @@ await Promise.all([
     ...common,
     entryPoints: [join(root, 'src', 'shim', 'index.ts')],
     outfile: join(out, 'shim.js'),
-    alias: { '@upstream': join(upstream, 'src') },
+    alias: {
+      '@upstream': join(upstream, 'src'),
+      // Two of upstream's host-side files import these. See src/shim/stubs/.
+      vscode: join(root, 'src', 'shim', 'stubs', 'vscode.ts'),
+      crypto: join(root, 'src', 'shim', 'stubs', 'crypto.ts'),
+    },
     nodePaths: [join(upstream, 'node_modules')],
     define: {
       ...(common.define ?? {}),

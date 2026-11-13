@@ -71,7 +71,15 @@
   --vscode-textPreformat-foreground: var(--oc-fg);
   --vscode-textCodeBlock-background: var(--oc-elevated);
   --vscode-textBlockQuote-background: transparent;
-  --vscode-textBlockQuote-border: var(--oc-border);
+  --vscode-textBlockQuote-border: color-mix(in srgb, var(--oc-fg) 22%, transparent);
+  --vscode-markdownForHumans-codeKeyword: var(--oc-syntax-keyword, var(--oc-fg));
+  --vscode-markdownForHumans-codeFunction: var(--oc-syntax-function, var(--oc-fg));
+  --vscode-markdownForHumans-codeValue: var(--oc-syntax-number, var(--oc-fg));
+  --vscode-markdownForHumans-codeString: var(--oc-syntax-string, var(--oc-fg));
+  --vscode-markdownForHumans-codeType: var(--oc-syntax-type, var(--oc-fg));
+  --vscode-markdownForHumans-codeComment: var(--oc-syntax-comment, var(--oc-muted));
+  --vscode-markdownForHumans-codeAddition: var(--oc-success-text);
+  --vscode-markdownForHumans-codeDeletion: var(--oc-error-text);
   --vscode-editorWarning-foreground: var(--oc-warning-text);
   --vscode-editorError-foreground: var(--oc-error-text);
   --vscode-notificationsWarningIcon-foreground: var(--oc-warning-text);
@@ -96,11 +104,164 @@ body {
   color: var(--oc-muted);
   font: 400 13px/1.5 var(--oc-font, system-ui, sans-serif);
 }
+:root {
+  --vm-measure: 800px;
+  --vm-gutter: 32px;
+}
+@media (max-width: 560px) {
+  :root {
+    --vm-gutter: 18px;
+  }
+}
+.markdown-editor.ProseMirror {
+  box-sizing: border-box;
+  max-width: calc(var(--vm-measure) + 2 * var(--vm-gutter));
+  min-height: calc(100vh - var(--vm-toolbar-height, 41px));
+  margin: 0 auto;
+  padding: 18px var(--vm-gutter) 96px;
+}
+.formatting-toolbar {
+  gap: 2px;
+  padding: 6px max(10px, calc((100% - var(--vm-measure)) / 2 - 7px));
+  background-color: var(--oc-bg);
+  border-bottom: 1px solid var(--oc-border);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  transition: none;
+}
+.toolbar-button {
+  transition: background-color 0.12s ease, opacity 0.12s ease;
+}
+.toolbar-button:hover {
+  transform: none;
+}
+.toolbar-button.active {
+  background-color: var(--oc-active);
+  color: var(--oc-primary-text);
+  box-shadow: none;
+}
+.toolbar-button.disabled.active {
+  background-color: transparent;
+  color: var(--oc-fg);
+}
+.toolbar-dropdown-menu {
+  padding: 4px;
+  border-radius: 10px;
+  box-shadow: 0 8px 28px rgb(0 0 0 / 14%);
+}
+.toolbar-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font: 400 13px/1.35 var(--oc-font, system-ui, sans-serif);
+}
+.markdown-link {
+  color: var(--oc-primary-text);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+  text-underline-offset: 3px;
+}
+.markdown-link:hover {
+  text-decoration-color: currentColor;
+}
+.markdown-editor code {
+  padding: 0.15em 0.3em;
+  border-radius: 5px;
+}
+.markdown-editor pre {
+  padding: 16px 18px;
+  border-radius: 8px;
+}
+.markdown-editor kbd {
+  padding: 1px 6px;
+  border: 1px solid color-mix(in srgb, var(--oc-fg) 20%, transparent);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: var(--oc-elevated);
+  font: 500 0.82em/1.5 var(--oc-mono, ui-monospace, monospace);
+  white-space: nowrap;
+}
+.markdown-editor ul[data-type=taskList] li > label {
+  margin-right: 9px;
+}
+.markdown-editor ul[data-type=taskList] input[type=checkbox] {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--oc-primary);
+  vertical-align: -2px;
+  cursor: pointer;
+}
+.mermaid-wrapper {
+  border-radius: 8px;
+}
+.mermaid-wrapper:hover {
+  background-color: color-mix(in srgb, var(--oc-elevated) 94%, var(--oc-fg));
+}
+.image-wrapper.image-load-failed {
+  display: inline-flex;
+  max-width: 100%;
+  vertical-align: middle;
+}
+.image-load-error:not([hidden]) {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  box-sizing: border-box;
+  max-width: min(100%, 380px);
+  min-height: 26px;
+  padding: 3px 10px 3px 30px;
+  border: 1px dashed color-mix(in srgb, var(--oc-fg) 24%, transparent);
+  border-radius: 7px;
+  background: var(--oc-subtle) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238d8a82' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='3' width='18' height='18' rx='2'/%3E%3Ccircle cx='8.5' cy='8.5' r='1.5'/%3E%3Cpath d='m21 15-5-5L5 21'/%3E%3C/svg%3E") 8px center / 15px 15px no-repeat;
+  color: transparent;
+  font-size: 0;
+  overflow: hidden;
+}
+.image-load-error::before {
+  content: attr(data-alt);
+  flex: none;
+  max-width: 60%;
+  overflow: hidden;
+  color: var(--oc-fg);
+  font: 500 12.5px/1.5 var(--oc-font, system-ui, sans-serif);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.image-load-error[data-alt=""]::before {
+  display: none;
+}
+.image-load-error::after {
+  content: attr(data-src);
+  min-width: 0;
+  overflow: hidden;
+  color: var(--oc-muted);
+  font: 400 11.5px/1.5 var(--oc-mono, ui-monospace, monospace);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.vm-readonly-chip {
+  position: fixed;
+  top: 10px;
+  right: 16px;
+  z-index: 90;
+  padding: 2px 9px;
+  border: 1px solid var(--oc-border);
+  border-radius: 999px;
+  background: var(--oc-elevated);
+  color: var(--oc-muted);
+  font: 500 11.5px/1.6 var(--oc-font, system-ui, sans-serif);
+  pointer-events: none;
+}
 .formatting-toolbar .feedback-start-button,
 .formatting-toolbar .copilot-add-button,
 .formatting-toolbar .source-button,
 .formatting-toolbar .settings-button,
 .formatting-toolbar .toolbar-dropdown:has(.codicon-export),
+.formatting-toolbar .toolbar-button:has(> .uses-svg-icon),
 .image-menu-button {
   display: none !important;
 }

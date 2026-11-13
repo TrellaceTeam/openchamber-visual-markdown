@@ -1,0 +1,14 @@
+diff --git a/src/webview/extensions/customImage.ts b/src/webview/extensions/customImage.ts
+index aec208d..358794f 100644
+--- a/src/webview/extensions/customImage.ts
++++ b/src/webview/extensions/customImage.ts
+@@ -307,6 +307,9 @@ export const CustomImage = Image.extend({
+           'Unable to load image: {0}',
+           node.attrs['markdown-src'] || node.attrs.src || ''
+         );
++        // Added by Visual Markdown: the stylesheet shows these instead of an error box.
++        errorLabel.dataset.alt = String(node.attrs.alt ?? '');
++        errorLabel.dataset.src = String(node.attrs['markdown-src'] || node.attrs.src || '');
+         errorLabel.hidden = false;
+         wrapper.classList.add('image-load-failed');
+       };

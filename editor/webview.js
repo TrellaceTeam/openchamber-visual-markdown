@@ -224012,6 +224012,8 @@ Please report this to https://github.com/markedjs/marked.`, e3) {
             "Unable to load image: {0}",
             node2.attrs["markdown-src"] || node2.attrs.src || ""
           );
+          errorLabel.dataset.alt = String(node2.attrs.alt ?? "");
+          errorLabel.dataset.src = String(node2.attrs["markdown-src"] || node2.attrs.src || "");
           errorLabel.hidden = false;
           wrapper.classList.add("image-load-failed");
         };
@@ -226036,6 +226038,29 @@ Please report this to https://github.com/markedjs/marked.`, e3) {
 
   // .upstream/markdown-for-humans/src/webview/extensions/mermaid.ts
   init_l10n2();
+
+  // .upstream/markdown-for-humans/src/webview/utils/hostMermaidTheme.ts
+  function supplied(dark) {
+    const provider = window.visualMarkdownMermaidTheme;
+    if (typeof provider !== "function") return null;
+    try {
+      const theme = provider(dark);
+      return theme && typeof theme.theme === "string" ? theme : null;
+    } catch (error4) {
+      console.warn("[MD4H] Host Mermaid theme failed:", error4);
+      return null;
+    }
+  }
+  function mermaidThemeConfig(dark) {
+    const host = supplied(dark);
+    if (!host) return { theme: dark ? "dark" : "default" };
+    return host.themeVariables ? { theme: host.theme, themeVariables: { ...host.themeVariables } } : { theme: host.theme };
+  }
+  function mermaidThemeKey(dark) {
+    return `${dark ? "dark" : "light"}:${supplied(dark)?.key ?? ""}`;
+  }
+
+  // .upstream/markdown-for-humans/src/webview/extensions/mermaid.ts
   var MERMAID_RENDER_STATE_ATTRIBUTE = "data-md4h-mermaid-state";
   function setMermaidRenderState(container2, state4) {
     container2.setAttribute(MERMAID_RENDER_STATE_ATTRIBUTE, state4);
@@ -226055,10 +226080,9 @@ Please report this to https://github.com/markedjs/marked.`, e3) {
     return false;
   }
   function initializeMermaid() {
-    const theme = isDarkMode() ? "dark" : "default";
     mermaid_default.initialize({
       startOnLoad: false,
-      theme,
+      ...mermaidThemeConfig(isDarkMode()),
       securityLevel: "strict",
       // Safer for VS Code webview
       fontFamily: "inherit"
@@ -226067,15 +226091,15 @@ Please report this to https://github.com/markedjs/marked.`, e3) {
   initializeMermaid();
   var themeRerenderers = /* @__PURE__ */ new Set();
   var themeObserver = null;
-  var lastDarkMode = false;
+  var lastThemeKey = "";
   function registerThemeRerender(rerender) {
     themeRerenderers.add(rerender);
     if (!themeObserver) {
-      lastDarkMode = isDarkMode();
+      lastThemeKey = mermaidThemeKey(isDarkMode());
       themeObserver = new MutationObserver(() => {
-        const dark = isDarkMode();
-        if (dark === lastDarkMode) return;
-        lastDarkMode = dark;
+        const key = mermaidThemeKey(isDarkMode());
+        if (key === lastThemeKey) return;
+        lastThemeKey = key;
         themeRerenderers.forEach((callback) => callback());
       });
       themeObserver.observe(document.body, { attributes: true, attributeFilter: ["class"] });
@@ -226188,10 +226212,9 @@ ${content}
             return;
           }
           try {
-            const theme = isDarkMode() ? "dark" : "default";
             mermaid_default.initialize({
               startOnLoad: false,
-              theme,
+              ...mermaidThemeConfig(isDarkMode()),
               securityLevel: "strict",
               fontFamily: "inherit"
             });
@@ -229084,6 +229107,16 @@ ${code3}
     const content = node2.content;
     if (!Array.isArray(content) || content.length === 0) return true;
     return !content.some(isMeaningfulInlineNode);
+  }
+  function stripEmptyDocParagraphsFromJson(doc3) {
+    if (doc3.type !== "doc" || !Array.isArray(doc3.content)) {
+      return doc3;
+    }
+    const nextContent = doc3.content.filter((child) => !isEmptyParagraph(child));
+    return {
+      ...doc3,
+      content: nextContent
+    };
   }
   function hasSignificantIndent(node2) {
     if (node2.type === "codeBlock") return Boolean(node2.attrs?.["indent-prefix"]);
@@ -234465,6 +234498,61 @@ ${template.diagram}
     return true;
   }
 
+  // .upstream/markdown-for-humans/src/webview/utils/hostBridge.ts
+  function managerOf(editor2) {
+    const holder = editor2;
+    return holder.markdown ?? holder.storage?.markdown;
+  }
+  function describeBlocks(editor2) {
+    const manager = managerOf(editor2);
+    if (!manager?.serialize) return null;
+    patchMarkdownSerialization(manager);
+    const serialize2 = manager.serialize.bind(manager);
+    const remembered = new Map(listRememberedBlockSources(editor2).map((block3) => [block3.index, block3]));
+    const blocks2 = [];
+    const doc3 = editor2.state.doc;
+    for (let index = 0; index < doc3.childCount; index++) {
+      const held = remembered.get(index);
+      if (held) {
+        blocks2.push({ source: held.source, serialized: held.serialized });
+        continue;
+      }
+      const serialized = serializeBlockMarkdown(doc3.child(index).toJSON(), serialize2);
+      if (serialized !== "") blocks2.push({ source: null, serialized });
+    }
+    return blocks2;
+  }
+  function fingerprint(editor2, json3) {
+    const normalized2 = editor2.schema.nodeFromJSON(json3).toJSON();
+    return JSON.stringify(stripEmptyDocParagraphsFromJson(normalized2));
+  }
+  function matchesDocument2(editor2, markdown, alternative) {
+    const manager = managerOf(editor2);
+    if (typeof manager?.parse !== "function") return false;
+    try {
+      const candidate = fingerprint(editor2, manager.parse(markdown));
+      if (candidate === JSON.stringify(stripEmptyDocParagraphsFromJson(editor2.state.doc.toJSON()))) {
+        return true;
+      }
+      return alternative !== void 0 && candidate === fingerprint(editor2, manager.parse(alternative));
+    } catch {
+      return false;
+    }
+  }
+  function installHostBridge(getEditor) {
+    const bridge = {
+      describeBlocks: () => {
+        const editor2 = getEditor();
+        return editor2 ? describeBlocks(editor2) : null;
+      },
+      matchesDocument: (markdown, alternative) => {
+        const editor2 = getEditor();
+        return editor2 ? matchesDocument2(editor2, markdown, alternative) : false;
+      }
+    };
+    window.visualMarkdownEditor = bridge;
+  }
+
   // .upstream/markdown-for-humans/src/webview/features/outOfSyncBanner.ts
   init_l10n2();
   var banner = null;
@@ -237140,16 +237228,16 @@ ${text5}
     return shape;
   }
   function fingerprintFeedbackTable(input) {
-    let fingerprint = tableFingerprintCache.get(input.table);
-    if (fingerprint === void 0) {
+    let fingerprint2 = tableFingerprintCache.get(input.table);
+    if (fingerprint2 === void 0) {
       const canonical = canonicalJson({ version: input.version, table: input.table.toJSON() });
-      fingerprint = `md4h-table/v1:${fnv1a64(canonical)}`;
-      tableFingerprintCache.set(input.table, fingerprint);
+      fingerprint2 = `md4h-table/v1:${fnv1a64(canonical)}`;
+      tableFingerprintCache.set(input.table, fingerprint2);
     }
     return {
       version: 1,
       tableOrdinal: input.tableOrdinal,
-      fingerprint
+      fingerprint: fingerprint2
     };
   }
   function validateFeedbackCellTarget(doc3, target) {
@@ -237526,7 +237614,7 @@ ${text5}
           value: { top: 0, bottom: map8.height, left: cell.left, right: cell.right }
         }
       ];
-      const fingerprint = fingerprintFeedbackTable({
+      const fingerprint2 = fingerprintFeedbackTable({
         version: 1,
         tableOrdinal: anchor2.ordinal,
         table: table2
@@ -237536,7 +237624,7 @@ ${text5}
           version: 1,
           tableOrdinal: anchor2.ordinal,
           rectangle: value2,
-          tableFingerprint: fingerprint
+          tableFingerprint: fingerprint2
         };
         const evidence = buildFeedbackTableCellEvidence(doc3, cellTarget2);
         if (!evidence) return [];
@@ -250154,6 +250242,7 @@ ${text5}
     setState: (state4) => vscode.setState(state4),
     viewGeneration
   };
+  installHostBridge(() => editor);
   var localDocumentRevision = 0;
   var acceptedDocumentVersion = 0;
   var nextDocumentEditSequence = 1;

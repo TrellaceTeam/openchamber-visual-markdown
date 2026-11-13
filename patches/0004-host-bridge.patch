@@ -1,0 +1,133 @@
+diff --git a/src/webview/editor.ts b/src/webview/editor.ts
+index 0373880..4781fdd 100644
+--- a/src/webview/editor.ts
++++ b/src/webview/editor.ts
+@@ -53,6 +53,7 @@ import {
+ import type { BlankLineMode } from '../shared/blankLinePolicy';
+ import { installBlankLineLexerNormalizer } from './utils/markedLexerNormalizer';
+ import { installExactBlankLines } from './utils/exactBlankLines';
++import { installHostBridge } from './utils/hostBridge';
+ import {
+   setupImageDragDrop,
+   hasPendingImageSaves,
+@@ -236,6 +237,8 @@ window.vscode = {
+   setState: state => vscode.setState(state),
+   viewGeneration,
+ };
++// Added by Visual Markdown: see utils/hostBridge.ts.
++installHostBridge(() => editor);
+ let localDocumentRevision = 0;
+ let acceptedDocumentVersion = 0;
+ let nextDocumentEditSequence = 1;
+diff --git a/src/webview/utils/hostBridge.ts b/src/webview/utils/hostBridge.ts
+new file mode 100644
+index 0000000..f03624c
+--- /dev/null
++++ b/src/webview/utils/hostBridge.ts
+@@ -0,0 +1,106 @@
++/**
++ * What the page hosting the editor needs to keep the file's own Markdown style.
++ *
++ * Added by Visual Markdown (https://github.com/TrellaceTeam/openchamber-visual-markdown).
++ *
++ * The editor saves an unedited block exactly as it was written. Once a block is edited,
++ * the serializer rewrites the whole block in its own style: `*` bullets become `-`, a
++ * hand-wrapped paragraph gets a hard break on every line, a padded table is repadded.
++ *
++ * A host can undo that with a three-way merge: the block as authored, the block as the
++ * serializer writes it, and the edited block. This file gives the host the first two for
++ * every block, and a way to check that a merged text still loads as the document on screen.
++ */
++
++import type { Editor, JSONContent } from '@tiptap/core';
++import {
++  listRememberedBlockSources,
++  patchMarkdownSerialization,
++  serializeBlockMarkdown,
++  stripEmptyDocParagraphsFromJson,
++} from './markdownSerialization';
++
++/** One top-level block of the loaded document. Empty paragraphs are left out. */
++export interface HostBridgeBlock {
++  /** The block's Markdown as authored, or null when the editor does not hold it. */
++  readonly source: string | null;
++  /** What the serializer writes for the block once it is edited. */
++  readonly serialized: string;
++}
++
++export interface HostBridge {
++  /** Call right after a document loads, before any edit. */
++  describeBlocks: () => HostBridgeBlock[] | null;
++  /**
++   * Whether `markdown` loads as the document on screen now, or failing that, as
++   * `alternative` loads.
++   */
++  matchesDocument: (markdown: string, alternative?: string) => boolean;
++}
++
++type Manager = {
++  serialize?: (json: JSONContent) => string;
++  parse?: (markdown: string) => JSONContent;
++};
++
++function managerOf(editor: Editor): Manager | undefined {
++  const holder = editor as unknown as { markdown?: Manager; storage?: { markdown?: Manager } };
++  return holder.markdown ?? holder.storage?.markdown;
++}
++
++function describeBlocks(editor: Editor): HostBridgeBlock[] | null {
++  const manager = managerOf(editor);
++  if (!manager?.serialize) return null;
++  patchMarkdownSerialization(manager as never);
++  const serialize = manager.serialize.bind(manager);
++
++  const remembered = new Map(listRememberedBlockSources(editor).map(block => [block.index, block]));
++  const blocks: HostBridgeBlock[] = [];
++  const doc = editor.state.doc;
++  for (let index = 0; index < doc.childCount; index++) {
++    const held = remembered.get(index);
++    if (held) {
++      blocks.push({ source: held.source, serialized: held.serialized });
++      continue;
++    }
++    const serialized = serializeBlockMarkdown(doc.child(index).toJSON() as JSONContent, serialize);
++    // An empty paragraph stands for a blank line. It is layout, not a block.
++    if (serialized !== '') blocks.push({ source: null, serialized });
++  }
++  return blocks;
++}
++
++/** A document as comparable text: schema defaults filled in, blank-line paragraphs dropped. */
++function fingerprint(editor: Editor, json: JSONContent): string {
++  const normalized = editor.schema.nodeFromJSON(json).toJSON() as JSONContent;
++  return JSON.stringify(stripEmptyDocParagraphsFromJson(normalized));
++}
++
++function matchesDocument(editor: Editor, markdown: string, alternative?: string): boolean {
++  const manager = managerOf(editor);
++  if (typeof manager?.parse !== 'function') return false;
++  try {
++    const candidate = fingerprint(editor, manager.parse(markdown));
++    if (candidate === JSON.stringify(stripEmptyDocParagraphsFromJson(editor.state.doc.toJSON()))) {
++      return true;
++    }
++    return alternative !== undefined && candidate === fingerprint(editor, manager.parse(alternative));
++  } catch {
++    return false;
++  }
++}
++
++/** Publish the bridge on `window.visualMarkdownEditor`. */
++export function installHostBridge(getEditor: () => Editor | null): void {
++  const bridge: HostBridge = {
++    describeBlocks: () => {
++      const editor = getEditor();
++      return editor ? describeBlocks(editor) : null;
++    },
++    matchesDocument: (markdown, alternative) => {
++      const editor = getEditor();
++      return editor ? matchesDocument(editor, markdown, alternative) : false;
++    },
++  };
++  (window as unknown as { visualMarkdownEditor?: HostBridge }).visualMarkdownEditor = bridge;
++}
