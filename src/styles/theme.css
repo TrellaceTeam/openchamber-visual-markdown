@@ -1,0 +1,141 @@
+/*
+ * Visual Markdown: OpenChamber's look for the editor.
+ *
+ * The editor's stylesheet is written against VS Code's theme variables (--vscode-*).
+ * OpenChamber hands its theme to the page as --oc-* variables on <html>. This file maps one
+ * onto the other, then turns off the parts of the editor that have nowhere to go here.
+ */
+
+:root {
+  /* Type */
+  --vscode-font-family: var(--oc-font, system-ui, sans-serif);
+  --vscode-font-weight: 400;
+  --vscode-font-size: 13px;
+  --vscode-editor-font-family: var(--oc-mono, ui-monospace, monospace);
+  --vscode-editor-font-size: 15px;
+  --vscode-editor-font-weight: 400;
+
+  /* Text and surfaces */
+  --vscode-foreground: var(--oc-fg);
+  --vscode-editor-foreground: var(--oc-fg);
+  --vscode-editor-background: var(--oc-bg);
+  --vscode-descriptionForeground: var(--oc-muted);
+  --vscode-disabledForeground: var(--oc-muted);
+  --vscode-icon-foreground: var(--oc-fg);
+  --vscode-errorForeground: var(--oc-error-text);
+  --vscode-focusBorder: var(--oc-primary);
+  --vscode-contrastBorder: transparent;
+  --vscode-contrastActiveBorder: transparent;
+
+  /* Floating surfaces: menus, dialogs, tooltips, toasts */
+  --vscode-editorWidget-background: var(--oc-elevated);
+  --vscode-editorWidget-foreground: var(--oc-elevated-fg);
+  --vscode-editorWidget-border: var(--oc-border);
+  --vscode-editorHoverWidget-background: var(--oc-elevated);
+  --vscode-editorHoverWidget-foreground: var(--oc-elevated-fg);
+  --vscode-editorHoverWidget-border: var(--oc-border);
+  --vscode-widget-border: var(--oc-border);
+  --vscode-widget-shadow: rgb(0 0 0 / 14%);
+  --vscode-panel-border: var(--oc-border);
+  --vscode-menu-background: var(--oc-elevated);
+  --vscode-menu-foreground: var(--oc-elevated-fg);
+  --vscode-menu-border: var(--oc-border);
+  --vscode-menu-selectionBackground: var(--oc-active);
+  --vscode-menu-selectionForeground: var(--oc-fg);
+  --vscode-menu-separatorBackground: var(--oc-border);
+  --vscode-dropdown-background: var(--oc-elevated);
+  --vscode-dropdown-foreground: var(--oc-elevated-fg);
+  --vscode-dropdown-border: var(--oc-border);
+  --vscode-notifications-background: var(--oc-elevated);
+  --vscode-notifications-foreground: var(--oc-elevated-fg);
+  --vscode-notifications-border: var(--oc-border);
+  --vscode-keybindingTable-headerBackground: var(--oc-subtle);
+
+  /* Controls */
+  --vscode-button-background: var(--oc-primary);
+  --vscode-button-foreground: var(--oc-primary-fg);
+  --vscode-button-hoverBackground: color-mix(in srgb, var(--oc-primary) 88%, var(--oc-fg));
+  --vscode-button-activeBackground: color-mix(in srgb, var(--oc-primary) 78%, var(--oc-fg));
+  --vscode-button-border: transparent;
+  --vscode-button-secondaryBackground: var(--oc-subtle);
+  --vscode-button-secondaryForeground: var(--oc-fg);
+  --vscode-button-secondaryHoverBackground: var(--oc-active);
+  --vscode-input-background: var(--oc-bg);
+  --vscode-input-foreground: var(--oc-fg);
+  --vscode-input-border: var(--oc-border);
+  --vscode-input-placeholderForeground: var(--oc-muted);
+  --vscode-inputValidation-errorBackground: color-mix(in srgb, var(--oc-error) 12%, var(--oc-bg));
+  --vscode-inputValidation-errorBorder: var(--oc-error);
+  --vscode-inputValidation-errorForeground: var(--oc-error-text);
+  --vscode-inputValidation-warningBackground: color-mix(in srgb, var(--oc-warning) 12%, var(--oc-bg));
+  --vscode-inputValidation-warningBorder: var(--oc-warning);
+  --vscode-inputValidation-warningForeground: var(--oc-warning-text);
+  --vscode-list-hoverBackground: var(--oc-hover);
+  --vscode-list-activeSelectionBackground: var(--oc-active);
+  --vscode-list-activeSelectionForeground: var(--oc-fg);
+  --vscode-toolbar-hoverBackground: var(--oc-hover);
+
+  /* Document */
+  --vscode-editor-selectionBackground: var(--oc-selection);
+  --vscode-editor-selectionHighlightBackground: var(--oc-selection);
+  --vscode-editor-hoverHighlightBackground: var(--oc-hover);
+  --vscode-editor-findMatchBackground: color-mix(in srgb, var(--oc-warning) 45%, transparent);
+  --vscode-editor-findMatchHighlightBackground: color-mix(in srgb, var(--oc-warning) 20%, transparent);
+  --vscode-editor-findMatchBorder: var(--oc-warning);
+  --vscode-textLink-foreground: var(--oc-primary-text);
+  --vscode-textLink-activeForeground: var(--oc-primary-text);
+  --vscode-textPreformat-foreground: var(--oc-fg);
+  --vscode-textCodeBlock-background: var(--oc-elevated);
+  --vscode-textBlockQuote-background: transparent;
+  --vscode-textBlockQuote-border: var(--oc-border);
+
+  /* Status colours */
+  --vscode-editorWarning-foreground: var(--oc-warning-text);
+  --vscode-editorError-foreground: var(--oc-error-text);
+  --vscode-notificationsWarningIcon-foreground: var(--oc-warning-text);
+  --vscode-statusBarItem-warningBackground: var(--oc-warning);
+  --vscode-charts-green: var(--oc-success-text);
+  --vscode-testing-iconPassed: var(--oc-success-text);
+  --vscode-terminal-ansiRed: var(--oc-error-text);
+  --vscode-terminal-ansiGreen: var(--oc-success-text);
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--oc-bg, Canvas);
+  color: var(--oc-fg, CanvasText);
+}
+
+body {
+  font-family: var(--oc-font, system-ui, sans-serif);
+}
+
+/* A short message when the editor itself cannot start. */
+.vm-notice {
+  margin: 24px 28px;
+  color: var(--oc-muted);
+  font: 400 13px/1.5 var(--oc-font, system-ui, sans-serif);
+}
+
+/* ---------------------------------------------------------------------------------------
+   Parts of the editor that belong to VS Code and have nowhere to go in OpenChamber.
+   --------------------------------------------------------------------------------------- */
+
+/* Feedback review, GitHub Copilot, the split source view and VS Code's settings page. */
+.formatting-toolbar .feedback-start-button,
+.formatting-toolbar .copilot-add-button,
+.formatting-toolbar .source-button,
+.formatting-toolbar .settings-button,
+/* PDF and Word export run on VS Code's side. */
+.formatting-toolbar .toolbar-dropdown:has(.codicon-export),
+/* Renaming, resizing and revealing image files need a file system. */
+.image-menu-button {
+  display: none !important;
+}
+
+/* A file OpenChamber will not save is read, not edited. */
+.vm-readonly .formatting-toolbar {
+  display: none !important;
+}

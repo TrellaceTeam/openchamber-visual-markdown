@@ -1,0 +1,18 @@
+{
+  "version": "0.1.0",
+  "upstream": "v0.4.6 8f3fecfb4430b912a97168c04198866461419f7d",
+  "mode": "dev",
+  "files": {
+    "highlighting-worker.js": 488861,
+    "index.html": 502,
+    "l10n/es.json": 84669,
+    "l10n/ja.json": 99525,
+    "l10n/pt-br.json": 83268,
+    "l10n/ru.json": 114113,
+    "l10n/zh-cn.json": 74476,
+    "shim.js": 369340,
+    "theme.css": 5135,
+    "webview.css": 718852,
+    "webview.js": 10680139
+  }
+}
