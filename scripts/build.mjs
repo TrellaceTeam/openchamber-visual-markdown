@@ -10,6 +10,7 @@ import { build } from 'esbuild';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { writeNotices } from './notices.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const upstream = join(root, '.upstream', 'markdown-for-humans');
@@ -51,6 +52,7 @@ const common = {
   target,
   minify: !dev,
   sourcemap: false,
+  metafile: true,
   treeShaking: true,
   legalComments: 'none',
   logLevel: 'warning',
@@ -60,7 +62,7 @@ const common = {
 rmSync(out, { recursive: true, force: true });
 mkdirSync(join(out, 'l10n'), { recursive: true });
 
-await Promise.all([
+const builds = await Promise.all([
   // The editor itself: upstream's webview, unchanged apart from patches/.
   build({
     ...common,
@@ -105,6 +107,9 @@ await Promise.all([
 ]);
 
 copyFileSync(join(root, 'src', 'index.html'), join(out, 'index.html'));
+
+// Every package whose code ended up in the page, for THIRD-PARTY-NOTICES.md.
+if (!dev) writeNotices({ root, upstream, pin, inputs: builds.flatMap((result) => Object.keys(result.metafile?.inputs ?? {})) });
 
 // Upstream's translations, one small JSON file per language, loaded only when needed.
 for (const name of readdirSync(join(upstream, 'l10n'))) {
