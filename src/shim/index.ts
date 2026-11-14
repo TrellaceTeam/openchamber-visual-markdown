@@ -56,12 +56,14 @@ const TRANSLATIONS: Readonly<Record<string, string>> = { es: 'es', ja: 'ja', 'pt
 
 const host = connectHost();
 
-// The editor listens for `message` on window, where OpenChamber's own messages also arrive.
-// The SDK's listener is registered above and the editor's comes last, so this one in between
-// keeps OpenChamber's messages away from the editor.
+// The editor listens for `message` on window and trusts whatever arrives, since in VS Code
+// only its own host can post there. Here OpenChamber's messages arrive on the same window,
+// and any other frame that can reach this one could post too. The SDK's listener is
+// registered above and the editor's comes last, so this one in between lets through only the
+// messages this page makes itself, which have no sender.
 window.addEventListener('message', (event) => {
   const data = event.data as { channel?: unknown } | null;
-  if (data !== null && typeof data === 'object' && data.channel === OPENCHAMBER_SDK_CHANNEL) {
+  if (event.source !== null || (data !== null && typeof data === 'object' && data.channel === OPENCHAMBER_SDK_CHANNEL)) {
     event.stopImmediatePropagation();
   }
 });
@@ -136,6 +138,8 @@ try {
         await nativeClipboard.writeText(text);
       },
       readText: (): Promise<string> => (nativeClipboard?.readText ? nativeClipboard.readText() : Promise.reject(new Error('The clipboard is not available.'))),
+      write: (items: ClipboardItems): Promise<void> => (nativeClipboard?.write ? nativeClipboard.write(items) : Promise.reject(new Error('The clipboard is not available.'))),
+      read: (): Promise<ClipboardItems> => (nativeClipboard?.read ? nativeClipboard.read() : Promise.reject(new Error('The clipboard is not available.'))),
     },
   });
 } catch (error) {
@@ -496,9 +500,14 @@ const addReferenceToChat = async (message: EditorMessage): Promise<void> => {
     reply(false, 'The file has not finished loading.');
     return;
   }
-  await flushEditor();
-  doc.settle();
-  const built = buildReference(message, doc.text, file.path.replace(/\\/g, '/'));
+  let built: ReturnType<typeof buildReference> = null;
+  try {
+    await flushEditor();
+    if (doc.settle()) reportChange();
+    built = buildReference(message, doc.text, file.path.replace(/\\/g, '/'));
+  } catch (error) {
+    log('reference failed', error);
+  }
   if (!built) {
     reply(false, 'Could not make a reference for this spot.');
     return;
@@ -530,7 +539,12 @@ const fromEditor = (message: EditorMessage): void => {
       sendUpdate(true);
       return;
     case 'document.sync.reload':
-      window.location.reload();
+      // The editor lost track of the document and asks for a fresh page. Text the host has
+      // not saved yet would go with it, so the host is asked to save first.
+      if (doc?.dirty && file && !file.readOnly) {
+        host.requestFileSave();
+        window.setTimeout(() => window.location.reload(), 1200);
+      } else window.location.reload();
       return;
     case 'edit':
     case 'document.teardown.edit':
@@ -552,14 +566,16 @@ const fromEditor = (message: EditorMessage): void => {
     case 'saveImage':
       // Image files cannot be written from here yet. Tell the editor at once, so a save
       // never waits on an image that will not arrive.
-      toEditor({
-        type: 'imageError',
-        protocolVersion: 1,
-        completionId: `vm-image-${Date.now().toString(36)}`,
-        placeholderId: message.placeholderId,
-        viewGeneration: message.viewGeneration ?? viewGeneration,
-        error: 'Adding image files is not supported in OpenChamber yet.',
-      });
+      queueMicrotask(() =>
+        toEditor({
+          type: 'imageError',
+          protocolVersion: 1,
+          completionId: `vm-image-${Date.now().toString(36)}`,
+          placeholderId: message.placeholderId,
+          viewGeneration: message.viewGeneration ?? viewGeneration,
+          error: 'Adding image files is not supported in OpenChamber yet.',
+        }),
+      );
       toast('info', 'Adding image files is not supported yet. Link to an image by its path or URL.');
       return;
     case 'openExternalLink':
@@ -643,6 +659,8 @@ const loadEditor = async (): Promise<void> => {
 };
 
 host.onReady((ready) => {
+  // Another project has other files, so the link dialog's list starts over.
+  if (context !== null && context.directory !== ready.directory) fileIndex.reset();
   context = ready;
   applyTheme(ready);
   void loadEditor();
@@ -674,8 +692,8 @@ host.onFileSnapshot(async () => {
     await new Promise((resolve) => window.setTimeout(resolve, 250));
     flushed = await flushEditor();
   }
-  if (!flushed) throw new Error('The editor is still working on your last change. Try again in a moment.');
-  doc.settle();
+  if (!flushed) throw new Error('The editor could not hand over your last change, so nothing was saved. Try again. If this keeps happening, close the file and open it again.');
+  if (doc.settle()) reportChange();
   const content = doc.text;
   const version = versionOf(content);
   snapshots.set(version, content);

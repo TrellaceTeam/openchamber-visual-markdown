@@ -21,10 +21,10 @@ index 0373880..4781fdd 100644
  let nextDocumentEditSequence = 1;
 diff --git a/src/webview/utils/hostBridge.ts b/src/webview/utils/hostBridge.ts
 new file mode 100644
-index 0000000..0df132e
+index 0000000..2780404
 --- /dev/null
 +++ b/src/webview/utils/hostBridge.ts
-@@ -0,0 +1,154 @@
+@@ -0,0 +1,171 @@
 +/**
 + * What the page hosting the editor needs to keep the file's own Markdown style.
 + *
@@ -69,15 +69,20 @@ index 0000000..0df132e
 +  /**
 +   * Whether `markdown` loads as blocks `from` up to `to` of the last {@link
 +   * HostBridge.currentBlocks} list, or failing that, as `alternative` loads. False when the
-+   * document changed since that list was made. Anything `markdown` holds after those blocks,
-+   * such as link definitions, is ignored.
++   * document changed since that list was made.
 +   *
 +   * `alternative` is the editor's own text for the same blocks. A text that loads the same
-+   * as it is no worse than what the editor would have saved.
++   * as it is no worse than what the editor would have saved. `markdown` must load as exactly
++   * as many blocks as `alternative` does, and anything either holds after the blocks, such as
++   * link definitions, must load the same in both. So a text that carries one block twice,
++   * or a block the person deleted, is refused.
 +   */
-+  matchesBlocks: (from: number, to: number, markdown: string, alternative?: string) => boolean;
-+  /** Whether `markdown` loads as the whole document on screen now. */
-+  matchesDocument: (markdown: string) => boolean;
++  matchesBlocks: (from: number, to: number, markdown: string, alternative: string) => boolean;
++  /**
++   * Whether `markdown` loads as the whole document on screen now or, failing that, as
++   * `alternative`, the editor's own text for the document, loads.
++   */
++  matchesDocument: (markdown: string, alternative?: string) => boolean;
 +}
 +
 +type Manager = {
@@ -146,32 +151,44 @@ index 0000000..0df132e
 +      if (!(from >= 0 && count > 0 && to <= listed.indexes.length)) return false;
 +      try {
 +        const parsed = parseBlocks(editor, markdown);
-+        if (!parsed || parsed.length < count) return false;
-+        const nodes = parsed.slice(0, count).map(json => editor.schema.nodeFromJSON(json));
-+        const live = listed;
-+        if (nodes.every((node, offset) => node.eq(live.doc.child(live.indexes[from + offset])))) {
-+          return true;
-+        }
-+        if (alternative === undefined) return false;
 +        const other = parseBlocks(editor, alternative);
-+        if (!other || other.length < count) return false;
-+        return nodes.every((node, offset) => node.eq(editor.schema.nodeFromJSON(other[offset])));
++        if (!parsed || !other) return false;
++        // No more blocks and no fewer than the editor's own text for the same stretch.
++        if (parsed.length !== other.length || parsed.length < count) return false;
++        const nodes = parsed.map(json => editor.schema.nodeFromJSON(json));
++        const others = other.map(json => editor.schema.nodeFromJSON(json));
++        for (let index = count; index < nodes.length; index++) {
++          if (!nodes[index].eq(others[index])) return false;
++        }
++        const live = listed;
++        const head = nodes.slice(0, count);
++        return (
++          head.every((node, offset) => node.eq(live.doc.child(live.indexes[from + offset]))) ||
++          head.every((node, offset) => node.eq(others[offset]))
++        );
 +      } catch {
 +        return false;
 +      }
 +    },
-+    matchesDocument: markdown => {
++    matchesDocument: (markdown, alternative) => {
 +      const editor = getEditor();
 +      if (!editor) return false;
 +      try {
 +        const parsed = parseBlocks(editor, markdown);
 +        if (!parsed) return false;
++        const sameAs = (blocks: JSONContent[]): boolean =>
++          parsed.length === blocks.length &&
++          parsed.every((json, index) =>
++            editor.schema.nodeFromJSON(json).eq(editor.schema.nodeFromJSON(blocks[index]))
++          );
 +        const wanted = (editor.state.doc.toJSON() as JSONContent).content ?? [];
 +        const live = stripEmptyDocParagraphsFromJson({ type: 'doc', content: wanted }).content ?? [];
-+        if (parsed.length !== live.length) return false;
-+        return parsed.every((json, index) =>
-+          editor.schema.nodeFromJSON(json).eq(editor.schema.nodeFromJSON(live[index]))
-+        );
++        if (sameAs(live)) return true;
++        if (alternative === undefined) return false;
++        // The editor's own text does not always load back as what is on screen. A text that
++        // loads the same as it is no worse than what the editor would have saved.
++        const other = parseBlocks(editor, alternative);
++        return other !== null && sameAs(other);
 +      } catch {
 +        return false;
 +      }

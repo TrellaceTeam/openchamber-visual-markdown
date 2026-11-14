@@ -51,13 +51,19 @@ export interface EditorCheck {
   currentBlocks: () => readonly string[] | null;
   /**
    * Whether `markdown` loads as blocks `from` up to `to` of that list or, failing that, as
-   * `alternative` loads. Anything either holds after those blocks is ignored.
+   * `alternative` loads. It must load as exactly as many blocks as `alternative`, and what
+   * either holds after those blocks (link definitions) must load the same in both.
    *
    * `alternative` is the editor's own text for the same blocks. The editor's text does not
    * always load back as what is on screen: a space typed before a line break is one case.
    * A merged text that loads the same as it is no worse than what would have been saved.
    */
   matchesBlocks: (from: number, to: number, markdown: string, alternative: string) => boolean;
+  /**
+   * Whether `markdown` loads as the whole document on screen or, failing that, as
+   * `alternative`, the editor's own text for the document, loads.
+   */
+  matchesDocument: (markdown: string, alternative: string) => boolean;
 }
 
 /** Above these sizes the merge is skipped and the editor's text is used. */
@@ -194,6 +200,20 @@ const codesOf = (text: string): Uint16Array => {
 const isWhitespace = (text: string): boolean => /^\s*$/.test(text);
 
 /**
+ * Whether two changes to a text of the same length each touched different places in it.
+ * Counted in code units throughout, the way the texts are indexed.
+ */
+const sameSpotsApart = (base: string, ours: string, theirs: string): boolean => {
+  for (let index = 0; index < base.length; index += 1) {
+    if (ours[index] !== base[index] && theirs[index] !== base[index] && ours[index] !== theirs[index]) return false;
+  }
+  return true;
+};
+
+/** Half of a character that takes two code units, standing alone. */
+const LONE_HALF = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+/**
  * Merge two versions of a short text, character by character.
  *
  * @returns null when both sides changed the same characters to different things
@@ -220,8 +240,10 @@ export function mergeCharacters(o: string, a: string, b: string): string | null 
     else if (theirs === base || ours === theirs) merged += ours;
     // Both changed the same spot. If each changed different characters of it (`3.` became
     // `3)` on one side and `2.` on the other), take both changes.
-    else if (base.length === ours.length && base.length === theirs.length && [...base].every((character, index) => ours[index] === character || theirs[index] === character || ours[index] === theirs[index])) {
-      merged += [...base].map((character, index) => (ours[index] === character ? theirs[index] : ours[index])).join('');
+    else if (base.length === ours.length && base.length === theirs.length && sameSpotsApart(base, ours, theirs)) {
+      let both = '';
+      for (let index = 0; index < base.length; index += 1) both += ours[index] === base[index] ? theirs[index] : ours[index];
+      merged += both;
     }
     // When one side only added text next to the spot, keep the other side's version of it
     // and add that text in the same place.
@@ -235,7 +257,9 @@ export function mergeCharacters(o: string, a: string, b: string): string | null 
     else if (isWhitespace(base) && isWhitespace(ours)) merged += theirs;
     else return null;
   }
-  return merged;
+  // The texts are merged by code unit. A result that cut a two-unit character (an emoji) in
+  // half is no merge at all.
+  return LONE_HALF.test(merged) && !LONE_HALF.test(a) && !LONE_HALF.test(b) ? null : merged;
 }
 
 const BULLET = /^(\s*(?:>\s*)*)([-*+])(\s+)/;
@@ -347,13 +371,19 @@ function mergeByPairing(o: readonly string[], a: readonly string[], b: readonly 
     // Lines only the author has (a blank line between list items, say) sit before the line
     // they belong to. They go when that line goes.
     const authorOnly = inA >= 0 ? a.slice(nextA, inA) : [];
+    // An author's line with text on it that pairs with nothing is the author's way of
+    // writing a line the editor writes differently, such as a heading underlined with ===.
+    // Carrying it over would write that line twice, so this stretch is not merged.
+    if (!authorOnly.every(isWhitespace)) return null;
     if (inA >= 0) nextA = inA + 1;
     if (inB < 0) continue;
     lines.push(...authorOnly, ...b.slice(nextB, inB));
     nextB = inB + 1;
     lines.push(inA >= 0 ? mergeLine(o[index], a[inA], b[inB]) : b[inB]);
   }
-  lines.push(...a.slice(nextA), ...b.slice(nextB));
+  const authorTail = a.slice(nextA);
+  if (!authorTail.every(isWhitespace)) return null;
+  lines.push(...authorTail, ...b.slice(nextB));
   return lines;
 }
 
@@ -550,5 +580,9 @@ export function mergeKeepingStyle(origin: Origin | null, editorText: string, edi
   }
 
   const result = pieces.map((piece) => (piece.kind === 'same' ? piece.lines : (chosen.get(piece) ?? editorLines)(piece)).join('')).join('');
-  return result === theirs ? editorText : result;
+  if (result === theirs) return editorText;
+  // Each block passed on its own, but what a block loads as can depend on its neighbours:
+  // two lists side by side become one when both use the same marker. So the whole text gets
+  // one last check, and the editor's own text is kept when it fails.
+  return editor.matchesDocument(result, theirs) ? result : editorText;
 }

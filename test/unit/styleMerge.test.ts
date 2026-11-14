@@ -78,11 +78,19 @@ const block = (source: string | null, serialized: string): LoadedBlock => ({ sou
  * A stand-in for the editor: the blocks its text is made of, and a check that accepts every
  * merged block unless `reject` says no. `seen` records what was checked.
  */
-const editorWith = (blocks: readonly string[], reject: (markdown: string) => boolean = () => false): EditorCheck & { seen: Array<{ from: number; to: number; markdown: string }> } => {
+const editorWith = (
+  blocks: readonly string[],
+  reject: (markdown: string) => boolean = () => false,
+  rejectDocument: (markdown: string) => boolean = () => false,
+): EditorCheck & { seen: Array<{ from: number; to: number; markdown: string }> } => {
   const seen: Array<{ from: number; to: number; markdown: string }> = [];
   return {
     seen,
     currentBlocks: () => blocks,
+    matchesDocument: (markdown, alternative) => {
+      assert.equal(typeof alternative, 'string');
+      return !rejectDocument(markdown);
+    },
     matchesBlocks: (from, to, markdown, alternative) => {
       assert.equal(typeof alternative, 'string');
       seen.push({ from, to, markdown });
@@ -204,7 +212,7 @@ test('mergeKeepingStyle gives the editor text back when its blocks are from anot
   const origin = planOrigin(content, [block('* one\n* two', '- one\n- two')]);
   const theirs = '- one\n- Zqtwo\n';
   assert.equal(mergeKeepingStyle(origin, theirs, editorWith(['- one\n- Zqtwo and more typed since'])), theirs);
-  assert.equal(mergeKeepingStyle(origin, theirs, { currentBlocks: () => null, matchesBlocks: () => true }), theirs);
+  assert.equal(mergeKeepingStyle(origin, theirs, { currentBlocks: () => null, matchesBlocks: () => true, matchesDocument: () => true }), theirs);
 });
 
 test('mergeKeepingStyle keeps a file with no final newline that way', () => {

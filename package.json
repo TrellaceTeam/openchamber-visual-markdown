@@ -35,7 +35,7 @@
     "build": "node scripts/build.mjs",
     "build:dev": "node scripts/build.mjs --dev",
     "typecheck": "tsc --noEmit -p .",
-    "test": "node --test test/unit",
+    "test": "node scripts/test-unit.mjs",
     "test:harness": "node test/harness/run.mjs",
     "check": "bunx openchamber-guest-check"
   },

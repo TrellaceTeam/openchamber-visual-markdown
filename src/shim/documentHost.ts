@@ -42,12 +42,15 @@ export class DocumentHost {
   private unmerged: string | null = null;
   private origin: Origin | null = null;
   private editor: EditorCheck | null = null;
+  /** Whether the loaded text has front matter, which the editor shows as a code block. */
+  private wrapped: boolean;
   private readonly mode: BlankLineMode;
   private readonly sameRendering: (a: string, b: string) => boolean;
 
   constructor(text: string, options: DocumentHostOptions) {
     this.saved = text;
     this.current = text;
+    this.wrapped = wrapFrontmatter(text) !== text;
     this.mode = options.blankLineMode;
     this.sameRendering = options.equivalent ?? isMarkdownStructurallyEquivalent;
   }
@@ -78,9 +81,14 @@ export class DocumentHost {
 
   /** Markdown from the editor, in the form it would be written to the file. */
   normalize(editorContent: string): string {
-    let policy = applyBlankLinePolicy(unwrapFrontmatter(editorContent), this.mode);
+    // Only a file that came with front matter gets it unwrapped. A file that starts with a
+    // code sample of YAML or JSON keeps its fence.
+    let policy = applyBlankLinePolicy(this.wrapped ? unwrapFrontmatter(editorContent) : editorContent, this.mode);
     if (policy === '') return policy;
     if (frontmatterIsTight(this.saved)) policy = tightenFrontmatter(policy);
+    // The editor's text never starts with a blank line. The file keeps the ones it had.
+    const leading = this.saved.trim() === '' ? '' : (/^\n+/.exec(this.saved)?.[0] ?? '');
+    if (leading !== '' && !policy.startsWith('\n')) policy = leading + policy;
     const ending = this.saved.trim() === '' ? '\n' : trailingNewlines(this.saved);
     return policy.replace(/\n*$/, '') + ending;
   }
@@ -88,8 +96,8 @@ export class DocumentHost {
   /**
    * Take the editor's Markdown after a change.
    *
-   * The editor writes Markdown in its own style: `*` bullets become `-`, wrapped lines are
-   * joined, and so on. When its text renders the same as the current text, the current text
+   * The editor writes Markdown in its own style: `*` bullets become `-`, wrapped lines get
+   * a hard break, and so on. When its text renders the same as the current text, the current text
    * is kept, so untouched parts of the file keep the bytes they had.
    */
   applyEditorContent(editorContent: string): EditOutcome {
@@ -159,6 +167,7 @@ export class DocumentHost {
     this.settled = true;
     this.unmerged = null;
     this.origin = null;
+    this.wrapped = wrapFrontmatter(text) !== text;
   }
 
   /**

@@ -116,8 +116,9 @@ const checks = [
     .map(({ name, content }) =>
       check(`locality: ${name} keeps every other line when one word is added`, async ({ page, server }) => {
         const frame = await openFile(page, server, { path: `docs/${name}`, content });
-        // The first heading or paragraph that is a direct child of the document.
-        const target = frame.locator('.ProseMirror > :is(h1, h2, h3, h4, h5, h6, p)').first();
+        // The first heading or paragraph with text in it that is a direct child of the
+        // document. An empty paragraph stands for a blank line, and typing there adds a line.
+        const target = frame.locator('.ProseMirror > :is(h1, h2, h3, h4, h5, h6, p)').filter({ hasText: /\S/ }).first();
         await target.click();
         await page.keyboard.press('Home');
         await page.keyboard.type('Zq');
@@ -494,6 +495,116 @@ const checks = [
     },
     { width: 380, height: 560 },
   ),
+  // --- Cases from code review 1: each once wrote text that was not the document on screen ----
+  check('review: typing at the end of an underlined heading saves one heading', async ({ page, server }) => {
+    const content = 'Project\n=======\n\nSome intro text.\n\nInstall\n-------\n\nRun the script.\n';
+    const frame = await openFile(page, server, { content });
+    await frame.locator('.ProseMirror > h1').first().click();
+    await page.keyboard.press('End');
+    await page.keyboard.type(' Two');
+    await settle(page);
+    const saved = await save(page);
+    const count = (saved.match(/Project/g) ?? []).length;
+    expect(count === 1, `the heading is in the file ${count} times: ${JSON.stringify(saved)}`);
+    expect(saved.includes('Project Two') && saved.endsWith('Some intro text.\n\nInstall\n-------\n\nRun the script.\n'), `saved ${JSON.stringify(saved)}`);
+    expect(await frame.evaluate((markdown) => window.visualMarkdownEditor.matchesDocument(markdown), saved), 'the saved text does not load as the document on screen');
+  }),
+
+  check('review: deleting the first word of an underlined heading leaves no copy behind', async ({ page, server }) => {
+    const content = '# Top\n\nInstall guide\n-------------\n\nRun the script.\n';
+    const frame = await openFile(page, server, { content });
+    await settle(page, 300);
+    await frame.evaluate(() => {
+      const editor = document.querySelector('.ProseMirror').editor;
+      let at = -1;
+      editor.state.doc.descendants((node, pos) => {
+        if (at < 0 && node.isText && node.text.startsWith('Install guide')) at = pos;
+        return at < 0;
+      });
+      editor.chain().focus().deleteRange({ from: at, to: at + 'Install '.length }).run();
+    });
+    await settle(page);
+    const saved = await save(page);
+    expect(!saved.includes('Install'), `the old heading came back: ${JSON.stringify(saved)}`);
+    expect(saved.startsWith('# Top\n\n') && saved.endsWith('\n\nRun the script.\n') && /guide/.test(saved), `saved ${JSON.stringify(saved)}`);
+    expect(await frame.evaluate((markdown) => window.visualMarkdownEditor.matchesDocument(markdown), saved), 'the saved text does not load as the document on screen');
+  }),
+
+  check('review: a deleted last block stays deleted', async ({ page, server }) => {
+    const content = '# Top\n\nSome text.\n\nSub\n---\n';
+    const frame = await openFile(page, server, { content });
+    await settle(page, 300);
+    await frame.evaluate(() => {
+      const editor = document.querySelector('.ProseMirror').editor;
+      let range = null;
+      editor.state.doc.descendants((node, pos) => {
+        if (!range && node.type.name === 'heading' && node.textContent === 'Sub') range = { from: pos, to: pos + node.nodeSize };
+        return !range;
+      });
+      editor.chain().focus().deleteRange(range).run();
+    });
+    await settle(page);
+    const saved = await save(page);
+    expect(!saved.includes('Sub'), `the deleted heading is in the file: ${JSON.stringify(saved)}`);
+    expect(saved.startsWith('# Top\n\nSome text.'), `saved ${JSON.stringify(saved)}`);
+  }),
+
+  check('review: a code sample at the top of a file keeps its fence when the file is edited', async ({ page, server }) => {
+    const content = '```yaml\n---\napiVersion: v1\nkind: Pod\n```\n\nNotes about the manifest.\n';
+    const frame = await openFile(page, server, { content });
+    await settle(page, 300);
+    expect(await insertBefore(frame, 'Notes', 'Zq'), 'the paragraph is not in the document');
+    await settle(page);
+    const saved = await save(page);
+    expect(saved === content.replace('Notes', 'ZqNotes'), `saved text differs: ${firstDifference(content.replace('Notes', 'ZqNotes'), saved)}`);
+  }),
+
+  check('review: blank lines under front matter and at the top of a file survive an edit', async ({ page, server }) => {
+    for (const content of ['---\ntitle: T\n---\n\n\n\n# Body\n\nText here.\n', '\n\n# Title\n\nText here.\n']) {
+      const frame = await openFile(page, server, { content });
+      await settle(page, 300);
+      expect(await insertBefore(frame, 'Text', 'Zq'), 'the paragraph is not in the document');
+      await settle(page);
+      const saved = await save(page);
+      expect(saved === content.replace('Text', 'ZqText'), `saved text differs: ${firstDifference(content.replace('Text', 'ZqText'), saved)}`);
+    }
+  }),
+
+  check('review: two lists that end up side by side are saved as what is on screen', async ({ page, server }) => {
+    const content = '1) alpha\n2) beta\n\n***\n\n1) gamma\n2) delta\n';
+    const frame = await openFile(page, server, { content });
+    await settle(page, 300);
+    await frame.evaluate(() => {
+      const editor = document.querySelector('.ProseMirror').editor;
+      let range = null;
+      editor.state.doc.descendants((node, pos) => {
+        if (!range && node.type.name === 'horizontalRule') range = { from: pos, to: pos + node.nodeSize };
+        return !range;
+      });
+      editor.chain().focus().deleteRange(range).run();
+    });
+    expect(await insertBefore(frame, 'beta', 'Zq'), 'the list item is not in the document');
+    await settle(page);
+    const saved = await save(page);
+    expect(saved.includes('Zqbeta') && saved.includes('gamma') && !saved.includes('***'), `saved ${JSON.stringify(saved)}`);
+    expect(await frame.evaluate((markdown) => window.visualMarkdownEditor.matchesDocument(markdown), saved), `the saved text does not load as the document on screen: ${JSON.stringify(saved)}`);
+  }),
+
+  check('review: a big file is clean right after a quick save', async ({ page, server }) => {
+    const filler = 'A filler paragraph that makes this file long enough to be handled as a big one.\n\n'.repeat(700);
+    const content = `${filler}* first item\n* second item\n`;
+    const frame = await openFile(page, server, { content });
+    await settle(page, 600);
+    expect(await insertBefore(frame, 'second item', 'Zq'), 'the list item is not in the document');
+    // No pause: the save comes before the page has merged the edit.
+    const saved = await save(page);
+    expect(saved === content.replace('second item', 'Zqsecond item'), `saved text differs: ${firstDifference(content.replace('second item', 'Zqsecond item'), saved)}`);
+    await settle(page, 400);
+    expect((await hostState(page)).dirty === false, 'the file is still marked changed after the save');
+    await settle(page, 1600);
+    expect((await hostState(page)).dirty === false, 'the file was marked changed again after the save');
+  }),
+
   // --- Working with the chat and the project ---------------------------------------------
   check('chat: the @ button puts the caret\'s lines into the chat box', async ({ page, server }) => {
     const content = '---\ntitle: Plan\n---\n\n# Plan\n\nFirst paragraph.\n\n- item one\n- item two\n\nLast paragraph here.\n';

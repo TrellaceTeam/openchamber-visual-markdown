@@ -33,7 +33,6 @@ export function lcsMap(a: ArrayLike<number>, b: ArrayLike<number>, maxDifference
   if (n === 0 || m === 0) return map;
 
   const max = n + m;
-  if (Math.min(n, m) === 0) return map;
   const limit = Math.min(max, maxDifference);
   // v[k + offset] is the furthest x reached on diagonal k (k = x - y).
   const offset = limit + 1;

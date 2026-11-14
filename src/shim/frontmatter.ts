@@ -9,7 +9,9 @@
 
 /** Wrap leading front matter in a fenced `yaml` block. Text without front matter is returned as is. */
 export function wrapFrontmatter(content: string): string {
-  const match = content.match(/^---\s*\r?\n([\s\S]*?)\r?\n---\s*\r?\n?/);
+  // Only spaces may follow each `---`. Blank lines under the front matter belong to the body,
+  // which keeps them.
+  const match = content.match(/^---[^\S\r\n]*\r?\n([\s\S]*?)\r?\n---[^\S\r\n]*(?:\r?\n|$)/);
   if (!match) return content;
 
   const usesCrLf = match[0].includes('\r\n');
