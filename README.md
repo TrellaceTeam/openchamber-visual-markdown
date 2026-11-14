@@ -18,6 +18,8 @@ Agents write their plans, specs, and notes as Markdown. Visual Markdown shows th
 
 The toolbar is translated into Spanish, Japanese, Brazilian Portuguese, Russian, and Simplified Chinese when the app is set to one of them.
 
+![The same plan with the app's dark theme](docs/visual-markdown-dark.png)
+
 ## Install it
 
 1. In OpenChamber, open **Settings**, then **Extensions**.
@@ -54,6 +56,7 @@ Three cases still change more than the words you typed:
 - **A padded table whose cell gets wider.** Every row is padded again to line up, as you would do by hand.
 - **A heading underlined with `===` or `---`.** Editing it rewrites it as a `#` heading.
 - **A block that fails the check.** It is saved in the editor's own style. The other blocks are not affected.
+- **A text that fails the last check.** Every block you edited is saved in the editor's own style. Blocks you did not edit keep theirs.
 
 The merge is in [`src/shim/styleMerge.ts`](src/shim/styleMerge.ts).
 
