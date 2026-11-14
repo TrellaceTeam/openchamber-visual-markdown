@@ -254,12 +254,72 @@ const sendUpdate = (force: boolean): void => {
   showNotice(null);
 };
 
+/**
+ * Put the page back at a saved scroll position once the layout has settled.
+ *
+ * The editor restores the position itself, then adds its toolbar above the document. The
+ * browser keeps the text on screen still by scrolling down by the toolbar's height, so each
+ * reopening would land a little lower than the last. The saved position was measured with
+ * the toolbar there, so setting it again is right. It stops as soon as the person scrolls.
+ */
+function holdScrollPosition(scrollTop: number): void {
+  if (!(scrollTop > 0)) return;
+  let released = false;
+  const release = (): void => {
+    released = true;
+  };
+  for (const type of ['wheel', 'pointerdown', 'keydown', 'touchstart'] as const) {
+    window.addEventListener(type, release, { capture: true, once: true, passive: true });
+  }
+  const apply = (): void => {
+    const surface = document.scrollingElement;
+    if (!released && surface && Math.abs(surface.scrollTop - scrollTop) > 1) surface.scrollTop = scrollTop;
+  };
+  requestAnimationFrame(() => requestAnimationFrame(apply));
+  for (const delay of [120, 400, 900]) window.setTimeout(apply, delay);
+}
+
 /** Tell the page how tall the toolbar is. It wraps onto more rows in a narrow pane. */
 let toolbarAdapted = false;
 function adaptToolbar(): void {
   const toolbar = document.querySelector<HTMLElement>('.formatting-toolbar');
   if (toolbarAdapted || !toolbar) return;
   toolbarAdapted = true;
+  if (isEditorViewState(viewState)) holdScrollPosition(viewState.scrollTop);
+
+  // A menu opens to the right of its button. In a narrow pane that can run off the edge,
+  // so slide it back in.
+  const keepMenusInView = (): void => {
+    for (const menu of toolbar.querySelectorAll<HTMLElement>('.toolbar-dropdown-menu')) {
+      let wanted = '';
+      if (menu.style.display !== 'none' && menu.offsetParent !== null) {
+        const moved = Number.parseFloat(menu.style.left) || 0;
+        const box = menu.getBoundingClientRect();
+        const over = box.right - moved - (window.innerWidth - 8);
+        if (over > 0) wanted = `${-Math.round(Math.min(over, Math.max(0, box.left - moved - 8)))}px`;
+      }
+      if (menu.style.left !== wanted) menu.style.left = wanted;
+    }
+  };
+  new MutationObserver(keepMenusInView).observe(toolbar, { subtree: true, attributes: true, attributeFilter: ['style'] });
+  window.addEventListener('resize', keepMenusInView);
+
+  // Escape closes an open menu, as menus in the app do.
+  window.addEventListener(
+    'keydown',
+    (event) => {
+      if (event.key !== 'Escape') return;
+      const open = [...toolbar.querySelectorAll<HTMLElement>('.toolbar-dropdown-menu')].filter((menu) => menu.style.display !== 'none' && menu.offsetParent !== null);
+      if (open.length === 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      for (const menu of open) {
+        menu.style.display = 'none';
+        menu.parentElement?.querySelector(':scope > button')?.setAttribute('aria-expanded', 'false');
+      }
+    },
+    true,
+  );
 
   const measure = (): void => document.documentElement.style.setProperty('--vm-toolbar-height', `${toolbar.offsetHeight}px`);
   measure();
@@ -518,11 +578,16 @@ const fromEditor = (message: EditorMessage): void => {
         .catch(() => [])
         .then((results) => toEditor({ type: 'fileSearchResults', results, requestId: message.requestId }));
       return;
-    case 'auditCheckFile':
-      void targetExists(String(message.relativePath ?? '')).then((exists) => {
-        toEditor({ type: 'auditCheckFileResult', requestId: message.requestId, exists });
+    case 'auditCheckFile': {
+      const target = String(message.relativePath ?? '');
+      void targetExists(target).then(async (exists) => {
+        // For a target that is missing, offer files of the same name elsewhere in the project.
+        const name = cleanTarget(target).split('/').pop() ?? '';
+        const suggestions = exists || name === '' ? [] : (await fileIndex.search(name, { all: true }, folder() ?? '').catch(() => [])).slice(0, 3).map((result) => result.path);
+        toEditor({ type: 'auditCheckFileResult', requestId: message.requestId, exists, ...(suggestions.length > 0 ? { suggestions } : {}) });
       });
       return;
+    }
     case 'copyReferenceForAi':
       void addReferenceToChat(message);
       return;

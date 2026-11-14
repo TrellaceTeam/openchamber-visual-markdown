@@ -1,18 +1,18 @@
 {
   "version": "0.1.0",
   "upstream": "v0.4.6 8f3fecfb4430b912a97168c04198866461419f7d",
-  "mode": "dev",
+  "mode": "release",
   "files": {
-    "highlighting-worker.js": 488861,
+    "highlighting-worker.js": 224060,
     "index.html": 576,
     "l10n/es.json": 83761,
     "l10n/ja.json": 98617,
     "l10n/pt-br.json": 82360,
     "l10n/ru.json": 113205,
     "l10n/zh-cn.json": 73568,
-    "shim.js": 451516,
-    "theme.css": 9914,
-    "webview.css": 718852,
-    "webview.js": 10687306
+    "shim.js": 248006,
+    "theme.css": 9600,
+    "webview.css": 691386,
+    "webview.js": 4736161
   }
 }

@@ -11,6 +11,9 @@ const showcase = read('showcase.md');
 const readme = read('readme-sample.md');
 const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="420" height="120" viewBox="0 0 420 120"><rect width="420" height="120" rx="10" fill="#f1e5dc" stroke="#b35017"/><text x="210" y="68" text-anchor="middle" font-family="sans-serif" font-size="20" fill="#44443d">An SVG from the project</text></svg>';
 const shots = [];
+// VM_WIDTH=380 draws the menus and dialogs as they are in a narrow side pane.
+const popoverWidth = Number(process.env.VM_WIDTH ?? 1100);
+const suffix = process.env.VM_WIDTH ? `-${popoverWidth}` : '';
 
 const views = [
   { name: 'doc-light-wide', content: showcase, theme: 'light', width: 1280, height: 900, full: true },
@@ -56,14 +59,14 @@ await withHarness(async ({ server, newHost }) => {
     { name: 'menu-math', click: '.toolbar-button[aria-label^="Insert math equation"]' },
     { name: 'dialog-link', click: '.toolbar-button[aria-label^="Insert/edit link"]' },
     { name: 'overlay-outline', click: '.toolbar-button.toc-button' },
-    { name: 'overlay-audit', click: '.toolbar-button.audit-button', wait: 2500 },
+    { name: 'overlay-audit', click: '.toolbar-button.audit-button', wait: 2500, content: '# Audit\n\n[Real](guide.md) and [Missing](nowhere.md) and a ![missing picture](none.png).\n', files: { 'docs/guide.md': '# g' } },
     { name: 'overlay-find', keys: 'Control+f', type: 'typo' },
     { name: 'state-bold-active', select: true },
   ];
   for (const theme of ['light', 'dark']) {
     for (const popover of popovers.filter((p) => `${p.name}-${theme}`.includes(filter))) {
-      const { page } = await newHost({ width: 1100, height: 760 });
-      const frame = await openFile(page, server, { path: 'docs/plan.md', content: showcase, theme });
+      const { page } = await newHost({ width: popoverWidth, height: 760 });
+      const frame = await openFile(page, server, { path: 'docs/plan.md', content: popover.content ?? showcase, theme, files: popover.files ?? {} });
       await page.waitForTimeout(900);
       try {
         // Put the caret in the first paragraph, so buttons that need focus are on.
@@ -79,7 +82,7 @@ await withHarness(async ({ server, newHost }) => {
       } catch (error) {
         console.log(`could not open ${popover.name}: ${error.message.split('\n')[0]}`);
       }
-      const path = join(outDir, `${popover.name}-${theme}.png`);
+      const path = join(outDir, `${popover.name}-${theme}${suffix}.png`);
       await page.screenshot({ path });
       shots.push(path);
       await page.close();

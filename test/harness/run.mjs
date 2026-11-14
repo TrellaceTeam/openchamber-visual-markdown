@@ -17,7 +17,7 @@ const corpus = readdirSync(corpusDir)
   .map((name) => ({ name, content: readFileSync(join(corpusDir, name), 'utf8').replace(/\r\n/g, '\n') }));
 
 const results = [];
-const check = (name, body) => ({ name, body });
+const check = (name, body, size) => ({ name, body, size });
 
 /** Describe the first difference between two texts, for a failure message. */
 const firstDifference = (expected, actual) => {
@@ -449,10 +449,51 @@ const checks = [
     const next = await waitForEditor(page);
     await settle(page, 900);
     const scrollTop = await next.evaluate(() => document.scrollingElement.scrollTop);
-    expect(Math.abs(scrollTop - 1800) < 40, `scrolled to ${scrollTop} after the reload, expected about 1800`);
+    expect(Math.abs(scrollTop - 1800) <= 2, `scrolled to ${scrollTop} after the reload, expected 1800`);
     expect((await hostState(page)).dirty === false, 'restoring the place marked the file changed');
+    // A second and third reload must not creep down the page.
+    for (let round = 0; round < 2; round += 1) {
+      await settle(page, 900);
+      await page.evaluate((text) => window.harness.externalChange(text), content);
+      const again = await waitForEditor(page);
+      await settle(page, 1200);
+      const position = await again.evaluate(() => document.scrollingElement.scrollTop);
+      expect(Math.abs(position - 1800) <= 2, `reload ${round + 2} landed at ${position}, expected 1800`);
+    }
   }),
 
+  // --- In a narrow side pane ---------------------------------------------------------------
+  check(
+    'narrow: every toolbar menu opens with its choices, inside the pane',
+    async ({ page, server }) => {
+      const frame = await openFile(page, server, { content: '# Narrow\n\nSome text to put the caret in.\n\n| A | B |\n| - | - |\n| 1 | 2 |\n' });
+      await frame.locator('.ProseMirror p').first().click();
+      const count = await frame.locator('.formatting-toolbar .toolbar-dropdown').count();
+      const seen = [];
+      for (let index = 0; index < count; index += 1) {
+        const dropdown = frame.locator('.formatting-toolbar .toolbar-dropdown').nth(index);
+        if (!(await dropdown.isVisible())) continue;
+        await dropdown.locator('button').first().click();
+        await settle(page, 250);
+        const menu = await dropdown.evaluate((element) => {
+          const list = element.querySelector('.toolbar-dropdown-menu');
+          const box = list.getBoundingClientRect();
+          return { label: element.querySelector('button').getAttribute('aria-label'), shown: getComputedStyle(list).display !== 'none', items: list.querySelectorAll('.toolbar-dropdown-item').length, left: Math.round(box.left), right: Math.round(box.right), bottom: Math.round(box.bottom), width: window.innerWidth, height: window.innerHeight };
+        });
+        seen.push(menu);
+        expect(menu.shown && menu.items > 0, `the menu "${menu.label}" did not open: ${JSON.stringify(menu)}`);
+        expect(menu.left >= 0 && menu.right <= menu.width, `the menu "${menu.label}" runs off the side: ${JSON.stringify(menu)}`);
+        expect(menu.bottom <= menu.height, `the menu "${menu.label}" runs off the bottom: ${JSON.stringify(menu)}`);
+        await page.keyboard.press('Escape');
+        await settle(page, 100);
+        expect(await dropdown.locator('.toolbar-dropdown-menu').isHidden(), `Escape did not close the menu "${menu.label}"`);
+      }
+      expect(seen.length >= 5, `only ${seen.length} menus were found`);
+      const rows = await frame.evaluate(() => Math.round(document.querySelector('.formatting-toolbar').getBoundingClientRect().height));
+      expect(rows < 85, `the toolbar is ${rows}px tall in a narrow pane`);
+    },
+    { width: 380, height: 560 },
+  ),
   // --- Working with the chat and the project ---------------------------------------------
   check('chat: the @ button puts the caret\'s lines into the chat box', async ({ page, server }) => {
     const content = '---\ntitle: Plan\n---\n\n# Plan\n\nFirst paragraph.\n\n- item one\n- item two\n\nLast paragraph here.\n';
@@ -535,8 +576,8 @@ const checks = [
 
 const selected = checks.filter(({ name }) => name.includes(filter));
 await withHarness(async ({ server, newHost }) => {
-  for (const { name, body } of selected) {
-    const { page, problems } = await newHost();
+  for (const { name, body, size } of selected) {
+    const { page, problems } = await newHost(size);
     const started = Date.now();
     try {
       await body({ page, server });

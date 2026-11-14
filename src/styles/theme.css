@@ -139,9 +139,40 @@ body {
   --vm-gutter: 32px;
 }
 
+/* A narrow pane, such as the file panel beside a chat: smaller headings, and toolbar
+   buttons packed closer so they take two rows where they would take three. */
 @media (max-width: 560px) {
   :root {
     --vm-gutter: 18px;
+  }
+
+  .markdown-editor h1 {
+    font-size: calc(var(--md-base-size) * 1.85);
+  }
+
+  .markdown-editor h2 {
+    font-size: calc(var(--md-base-size) * 1.5);
+  }
+
+  .markdown-editor h3 {
+    font-size: calc(var(--md-base-size) * 1.28);
+  }
+
+  .markdown-editor h4 {
+    font-size: calc(var(--md-base-size) * 1.15);
+  }
+
+  .formatting-toolbar {
+    gap: 0;
+    padding: 4px 10px;
+  }
+
+  .formatting-toolbar .toolbar-separator {
+    display: none;
+  }
+
+  .formatting-toolbar .toolbar-button {
+    padding: 5px 3px;
   }
 }
 
@@ -186,7 +217,10 @@ body {
 }
 
 .toolbar-dropdown-menu {
+  /* A long menu in a short pane scrolls instead of running off the bottom. */
+  max-height: min(70vh, 520px);
   padding: 4px;
+  overflow-y: auto;
   border-radius: 10px;
   box-shadow: 0 8px 28px rgb(0 0 0 / 14%);
 }
@@ -309,6 +343,18 @@ body {
   white-space: nowrap;
 }
 
+/* The outline and the audit list are half the pane wide upstream, which is far too little in
+   a side pane. Give them a width of their own. */
+.audit-overlay-panel,
+.toc-overlay-panel {
+  width: min(560px, calc(100vw - 24px));
+  max-width: none;
+}
+
+.audit-manual-input {
+  min-width: 120px;
+}
+
 /* Shown at the top right of a file OpenChamber will not save. */
 .vm-readonly-chip {
   position: fixed;
@@ -338,6 +384,8 @@ body {
 /* Insert image saves a picture file into the project, which the page cannot do. The button
    is the only one drawn with its own SVG. */
 .formatting-toolbar .toolbar-button:has(> .uses-svg-icon),
+/* The audit's Browse button opens VS Code's file picker. */
+.audit-browse-btn,
 /* Renaming, resizing and revealing image files need a file system. */
 .image-menu-button {
   display: none !important;
