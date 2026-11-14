@@ -7875,9 +7875,7 @@ ${GUEST_UI_LOOK_CSS}`;
     return lines;
   }
   var isBlank = (line) => line.trim() === "";
-  function planOrigin(content, blocks) {
-    if (!blocks || blocks.length === 0) return null;
-    const lines = splitLines(content);
+  function blockFinder(content, lines) {
     const lineStarts2 = [];
     let offset = 0;
     for (const line of lines) {
@@ -7894,6 +7892,36 @@ ${GUEST_UI_LOOK_CSS}`;
       }
       return low;
     };
+    return (block2, from) => {
+      let found = content.indexOf(block2, from);
+      while (found >= 0) {
+        const lineStart = content.lastIndexOf("\n", found - 1) + 1;
+        const after = found + block2.length;
+        const lineEnd = content.indexOf("\n", after);
+        const startsLine = content.slice(lineStart, found).trim() === "";
+        const endsLine = content.slice(after, lineEnd < 0 ? content.length : lineEnd).trim() === "";
+        if (startsLine && endsLine) return { start: lineAt(found), end: lineAt(Math.max(found, after - 1)) + 1, after };
+        found = content.indexOf(block2, found + 1);
+      }
+      return null;
+    };
+  }
+  function placeBlocks(text2, lines, blocks) {
+    const find = blockFinder(text2, lines);
+    const placed = [];
+    let cursor = 0;
+    for (const block2 of blocks) {
+      const at = find(block2, cursor);
+      if (!at) return null;
+      placed.push({ start: at.start, end: at.end });
+      cursor = at.after;
+    }
+    return placed;
+  }
+  function planOrigin(content, blocks) {
+    if (!blocks || blocks.length === 0) return null;
+    const lines = splitLines(content);
+    const find = blockFinder(content, lines);
     const entries = [];
     let cursor = 0;
     let cursorLine = 0;
@@ -7912,21 +7940,12 @@ ${GUEST_UI_LOOK_CSS}`;
         waiting.push(block2.serialized);
         continue;
       }
-      let found = content.indexOf(block2.source, cursor);
-      while (found >= 0) {
-        const startsLine = found === 0 || content[found - 1] === "\n" || content.slice(content.lastIndexOf("\n", found - 1) + 1, found).trim() === "";
-        const after = found + block2.source.length;
-        const endsLine = after === content.length || content[after] === "\n" || content.slice(after, content.indexOf("\n", after) < 0 ? content.length : content.indexOf("\n", after)).trim() === "";
-        if (startsLine && endsLine) break;
-        found = content.indexOf(block2.source, found + 1);
-      }
-      if (found < 0) return null;
-      const start = lineAt(found);
-      const end = lineAt(Math.max(found, found + block2.source.length - 1)) + 1;
-      placeWaiting(start);
-      entries.push({ start, end, canonical: block2.serialized });
-      cursor = found + block2.source.length;
-      cursorLine = end;
+      const at = find(block2.source, cursor);
+      if (!at) return null;
+      placeWaiting(at.start);
+      entries.push({ start: at.start, end: at.end, canonical: block2.serialized });
+      cursor = at.after;
+      cursorLine = at.end;
     }
     placeWaiting(lines.length);
     return { content, lines, entries };
@@ -8067,13 +8086,14 @@ ${GUEST_UI_LOOK_CSS}`;
   }
   function mergeConflict(o, a, b) {
     if (o.length === a.length && a.length === b.length) {
-      return { lines: o.map((base2, index) => mergeLine(base2, a[index], b[index])), conflict: { theirs: b, fine: true } };
+      return o.map((base2, index) => mergeLine(base2, a[index], b[index]));
     }
     const merged = mergeCharacters(o.join(""), a.join(""), b.join(""));
-    const lines = merged === null ? mergeByPairing(o, a, b) : splitLines(merged);
-    return lines === null ? { lines: b } : { lines, conflict: { theirs: b, fine: true } };
+    return merged === null ? mergeByPairing(o, a, b) : splitLines(merged);
   }
-  function mergeKeepingStyle(origin, editorText, validate) {
+  var sameLines = (x, y) => x.length === y.length && x.every((value, index) => value === y[index]);
+  var DEFINITION = /^ {0,3}\[[^\]\n]+\]:/;
+  function mergeKeepingStyle(origin, editorText, editor) {
     if (!origin || editorText === origin.content) return editorText;
     const ending = /\n*$/.exec(origin.content)?.[0] ?? "";
     const theirs = editorText.replace(/\n*$/, "") + ending;
@@ -8082,8 +8102,9 @@ ${GUEST_UI_LOOK_CSS}`;
     const theirLines = splitLines(theirs);
     const table2 = /* @__PURE__ */ new Map();
     const ourIds = idsOf(ours, table2);
-    const toTheirs = lcsMap(ourIds, idsOf(theirLines, table2), MAX_LINE_DIFFERENCE);
-    if (!toTheirs) return theirs;
+    const theirIds = idsOf(theirLines, table2);
+    const toTheirs = lcsMap(ourIds, theirIds, MAX_LINE_DIFFERENCE);
+    if (!toTheirs) return editorText;
     const insertedBefore = new Uint8Array(ours.length + 1);
     let expected = 0;
     for (let index = 0; index < ours.length; index += 1) {
@@ -8091,7 +8112,6 @@ ${GUEST_UI_LOOK_CSS}`;
       if (toTheirs[index] > expected) insertedBefore[index] = 1;
       expected = toTheirs[index] + 1;
     }
-    if (expected < theirLines.length) insertedBefore[ours.length] = 1;
     const touched = origin.entries.filter((entry) => {
       for (let line2 = entry.start; line2 < entry.end; line2 += 1) {
         if (toTheirs[line2] < 0) return true;
@@ -8099,56 +8119,111 @@ ${GUEST_UI_LOOK_CSS}`;
       }
       return false;
     });
-    if (touched.length === 0 || touched.length > MAX_TOUCHED_ENTRIES) return theirs;
+    if (touched.length === 0 || touched.length > MAX_TOUCHED_ENTRIES) return editorText;
     const base2 = [];
     let line = 0;
     for (const entry of touched) {
       for (; line < entry.start; line += 1) base2.push(ours[line]);
-      const ending2 = ours[entry.end - 1].endsWith("\n") ? "\n" : "";
+      const lineEnding = ours[entry.end - 1].endsWith("\n") ? "\n" : "";
       const canonical = splitLines(entry.canonical);
-      if (canonical.length > 0) canonical[canonical.length - 1] = canonical[canonical.length - 1].replace(/\n$/, "") + ending2;
+      if (canonical.length > 0) canonical[canonical.length - 1] = canonical[canonical.length - 1].replace(/\n$/, "") + lineEnding;
       base2.push(...canonical);
       line = entry.end;
     }
     for (; line < ours.length; line += 1) base2.push(ours[line]);
     const baseIds = idsOf(base2, table2);
     const baseToOurs = lcsMap(baseIds, ourIds, MAX_LINE_DIFFERENCE);
-    const baseToTheirs = lcsMap(baseIds, idsOf(theirLines, table2), MAX_LINE_DIFFERENCE);
-    if (!baseToOurs || !baseToTheirs) return theirs;
+    const baseToTheirs = lcsMap(baseIds, theirIds, MAX_LINE_DIFFERENCE);
+    if (!baseToOurs || !baseToTheirs) return editorText;
     const pieces = [];
     for (const chunk of diff3(base2.length, ours.length, theirLines.length, baseToOurs, baseToTheirs)) {
       if (chunk.stable) {
-        pieces.push({ lines: base2.slice(chunk.oStart, chunk.oStart + chunk.length) });
+        pieces.push({ start: chunk.bStart, end: chunk.bStart + chunk.length, lines: theirLines.slice(chunk.bStart, chunk.bStart + chunk.length), kind: "same" });
         continue;
       }
       const o = base2.slice(chunk.o[0], chunk.o[1]);
       const a = ours.slice(chunk.a[0], chunk.a[1]);
       const b = theirLines.slice(chunk.b[0], chunk.b[1]);
-      const same = (x, y) => x.length === y.length && x.every((value, index) => value === y[index]);
-      if (same(a, o)) pieces.push({ lines: b });
-      else if (same(b, o) || same(a, b)) pieces.push({ lines: a });
-      else pieces.push(mergeConflict(o, a, b));
+      const [start, end] = chunk.b;
+      if (sameLines(a, b) || sameLines(a, o)) {
+        pieces.push({ start, end, lines: b, kind: "same" });
+      } else if (sameLines(b, o)) {
+        pieces.push({ start, end, lines: a, kind: "ours" });
+      } else {
+        const merged2 = mergeConflict(o, a, b);
+        pieces.push(merged2 === null || sameLines(merged2, b) ? { start, end, lines: b, kind: "same" } : { start, end, lines: merged2, kind: "merged" });
+      }
     }
-    const assemble = (choose) => pieces.map((piece) => choose(piece).join("")).join("");
-    const attempts = [
-      // Everything merged.
-      assemble((piece) => piece.lines),
+    if (pieces.every((piece) => piece.kind === "same")) return editorText;
+    const blocks = editor.currentBlocks();
+    const placed = blocks ? placeBlocks(theirs, theirLines, blocks) : null;
+    if (!placed || placed.length === 0) return editorText;
+    const blocksAt = (start, end) => {
+      let first = placed.findIndex((block2) => block2.end > start);
+      if (first < 0) first = placed.length - 1;
+      let last = first;
+      while (last + 1 < placed.length && placed[last + 1].start < end) last += 1;
+      if (placed[first].start >= Math.max(end, start + 1) && first > 0) first -= 1;
+      return [first, Math.max(first, last)];
+    };
+    const groups = [];
+    for (const piece of pieces) {
+      if (piece.kind === "same") continue;
+      const [first, last] = blocksAt(piece.start, piece.end);
+      const from = Math.min(piece.start, placed[first].start);
+      const to = Math.max(piece.end, placed[last].end);
+      const previous = groups[groups.length - 1];
+      if (previous && first <= previous.last) {
+        previous.last = Math.max(previous.last, last);
+        previous.from = Math.min(previous.from, from);
+        previous.to = Math.max(previous.to, to);
+      } else {
+        groups.push({ first, last, from, to });
+      }
+    }
+    const definitions = theirLines.filter((text2) => DEFINITION.test(text2));
+    const context2 = definitions.length > 0 ? `
+
+${definitions.map((text2) => text2.endsWith("\n") ? text2 : `${text2}
+`).join("")}` : "";
+    const merged = (piece) => piece.lines;
+    const choices = [
+      merged,
       // The same, with added list items given their siblings' marker.
-      assemble((piece) => piece.conflict ? harmonizeListMarkers(piece.lines) : piece.lines),
-      // Only whole-line choices: where characters had to be merged, the editor's lines.
-      assemble((piece) => piece.conflict?.fine ? piece.conflict.theirs : piece.lines)
+      (piece) => piece.kind === "merged" ? harmonizeListMarkers(piece.lines) : piece.lines,
+      // Only whole-line choices: where characters were merged, the editor's lines.
+      (piece) => piece.kind === "merged" ? theirLines.slice(piece.start, piece.end) : piece.lines
     ];
-    const tried = /* @__PURE__ */ new Set([theirs]);
-    for (const candidate of attempts) {
-      if (tried.has(candidate)) continue;
-      tried.add(candidate);
-      if (validate(candidate, theirs)) return candidate;
+    const editorLines = (piece) => theirLines.slice(piece.start, piece.end);
+    const chosen = /* @__PURE__ */ new Map();
+    for (const group of groups) {
+      const inside = pieces.filter((piece) => piece.end > group.from && piece.start < group.to || piece.start === piece.end && piece.start >= group.from && piece.start <= group.to && piece.kind !== "same");
+      const textWith = (choice) => inside.map((piece) => {
+        if (piece.kind !== "same") return choice(piece).join("");
+        return theirLines.slice(Math.max(piece.start, group.from), Math.min(piece.end, group.to)).join("");
+      }).join("");
+      const editorsOwn = textWith(editorLines);
+      const tried = /* @__PURE__ */ new Set([editorsOwn]);
+      let pick = editorLines;
+      for (const choice of choices) {
+        const candidate = textWith(choice);
+        if (tried.has(candidate)) continue;
+        tried.add(candidate);
+        if (editor.matchesBlocks(group.first, group.last + 1, candidate + context2, editorsOwn + context2)) {
+          pick = choice;
+          break;
+        }
+      }
+      for (const piece of inside) {
+        if (piece.kind !== "same") chosen.set(piece, pick);
+      }
     }
-    return theirs;
+    const result = pieces.map((piece) => (piece.kind === "same" ? piece.lines : (chosen.get(piece) ?? editorLines)(piece)).join("")).join("");
+    return result === theirs ? editorText : result;
   }
 
   // src/shim/documentHost.ts
-  var SETTLE_INLINE_MAX = 2e5;
+  var SETTLE_INLINE_MAX = 5e4;
   var trailingNewlines = (text2) => /\n*$/.exec(text2)?.[0] ?? "";
   var DocumentHost = class {
     saved;
@@ -8158,7 +8233,7 @@ ${GUEST_UI_LOOK_CSS}`;
     /** The editor's latest text, when merging it was put off. */
     unmerged = null;
     origin = null;
-    validate = null;
+    editor = null;
     mode;
     sameRendering;
     constructor(text2, options) {
@@ -8203,11 +8278,11 @@ ${GUEST_UI_LOOK_CSS}`;
      */
     applyEditorContent(editorContent) {
       const large = editorContent.length > SETTLE_INLINE_MAX;
-      const deferred = large && this.dirty;
+      const deferred = large && (this.dirty || this.origin !== null);
       this.unmerged = deferred ? editorContent : null;
       const next = this.normalize(deferred ? editorContent : this.withAuthorStyle(editorContent));
       if (next === this.current) return "unchanged";
-      if (!deferred && this.equivalent(next, this.current)) return "unchanged";
+      if (!deferred && this.sameAs(next, this.current)) return "unchanged";
       this.current = next;
       this.revision += 1;
       this.settled = false;
@@ -8233,10 +8308,20 @@ ${GUEST_UI_LOOK_CSS}`;
           changed = true;
         }
       }
-      if (this.current === this.saved || !this.equivalent(this.current, this.saved)) return changed;
+      if (this.current === this.saved || !this.sameAs(this.current, this.saved)) return changed;
       this.current = this.saved;
       this.revision += 1;
       return true;
+    }
+    /**
+     * Whether two texts that differ are still the same document.
+     *
+     * With the editor's blocks known, the merge has already put back every byte the person did
+     * not change, so texts that differ are different documents. Without them, the editor's
+     * text is in its own style throughout, and the two are compared by what they render to.
+     */
+    sameAs(a, b) {
+      return this.origin === null && this.equivalent(a, b);
     }
     /** A snapshot with this text reached the disk. */
     markSaved(text2) {
@@ -8260,20 +8345,20 @@ ${GUEST_UI_LOOK_CSS}`;
      * is saved the way the editor writes it.
      *
      * @param blocks - the editor's top-level blocks, or null when it cannot say
-     * @param validate - whether a text loads as the document on screen
+     * @param editor - the editor's blocks as they stand later, and its check of a merged block
      */
-    setOrigin(blocks, validate) {
-      this.validate = validate;
+    setOrigin(blocks, editor) {
+      this.editor = editor;
       try {
-        this.origin = validate ? planOrigin(this.contentForEditor(), blocks) : null;
+        this.origin = editor ? planOrigin(this.contentForEditor(), blocks) : null;
       } catch {
         this.origin = null;
       }
     }
     withAuthorStyle(editorContent) {
-      if (!this.origin || !this.validate) return editorContent;
+      if (!this.origin || !this.editor) return editorContent;
       try {
-        return mergeKeepingStyle(this.origin, editorContent, this.validate);
+        return mergeKeepingStyle(this.origin, editorContent, this.editor);
       } catch {
         return editorContent;
       }
@@ -9831,7 +9916,7 @@ ${GUEST_UI_LOOK_CSS}`;
     });
     const bridge = window.visualMarkdownEditor;
     try {
-      doc.setOrigin(bridge?.describeBlocks() ?? null, bridge ? (candidate, alternative) => bridge.matchesDocument(candidate, alternative) : null);
+      doc.setOrigin(bridge?.describeBlocks() ?? null, bridge ?? null);
     } catch (error2) {
       log("style keeping is off for this file", error2);
       doc.setOrigin(null, null);

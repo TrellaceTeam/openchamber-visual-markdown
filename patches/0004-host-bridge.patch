@@ -21,10 +21,10 @@ index 0373880..4781fdd 100644
  let nextDocumentEditSequence = 1;
 diff --git a/src/webview/utils/hostBridge.ts b/src/webview/utils/hostBridge.ts
 new file mode 100644
-index 0000000..f03624c
+index 0000000..0df132e
 --- /dev/null
 +++ b/src/webview/utils/hostBridge.ts
-@@ -0,0 +1,106 @@
+@@ -0,0 +1,154 @@
 +/**
 + * What the page hosting the editor needs to keep the file's own Markdown style.
 + *
@@ -36,12 +36,15 @@ index 0000000..f03624c
 + *
 + * A host can undo that with a three-way merge: the block as authored, the block as the
 + * serializer writes it, and the edited block. This file gives the host the first two for
-+ * every block, and a way to check that a merged text still loads as the document on screen.
++ * every block, the blocks as they stand now, and a way to check that a merged text still
++ * loads as the blocks on screen.
 + */
 +
 +import type { Editor, JSONContent } from '@tiptap/core';
++import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 +import {
 +  listRememberedBlockSources,
++  listSyncBlocks,
 +  patchMarkdownSerialization,
 +  serializeBlockMarkdown,
 +  stripEmptyDocParagraphsFromJson,
@@ -59,10 +62,22 @@ index 0000000..f03624c
 +  /** Call right after a document loads, before any edit. */
 +  describeBlocks: () => HostBridgeBlock[] | null;
 +  /**
-+   * Whether `markdown` loads as the document on screen now, or failing that, as
-+   * `alternative` loads.
++   * The Markdown of each block now, exactly as the next sync writes it. The positions in
++   * this list are the block numbers {@link HostBridge.matchesBlocks} takes.
 +   */
-+  matchesDocument: (markdown: string, alternative?: string) => boolean;
++  currentBlocks: () => string[] | null;
++  /**
++   * Whether `markdown` loads as blocks `from` up to `to` of the last {@link
++   * HostBridge.currentBlocks} list, or failing that, as `alternative` loads. False when the
++   * document changed since that list was made. Anything `markdown` holds after those blocks,
++   * such as link definitions, is ignored.
++   *
++   * `alternative` is the editor's own text for the same blocks. A text that loads the same
++   * as it is no worse than what the editor would have saved.
++   */
++  matchesBlocks: (from: number, to: number, markdown: string, alternative?: string) => boolean;
++  /** Whether `markdown` loads as the whole document on screen now. */
++  matchesDocument: (markdown: string) => boolean;
 +}
 +
 +type Manager = {
@@ -97,37 +112,112 @@ index 0000000..f03624c
 +  return blocks;
 +}
 +
-+/** A document as comparable text: schema defaults filled in, blank-line paragraphs dropped. */
-+function fingerprint(editor: Editor, json: JSONContent): string {
-+  const normalized = editor.schema.nodeFromJSON(json).toJSON() as JSONContent;
-+  return JSON.stringify(stripEmptyDocParagraphsFromJson(normalized));
-+}
-+
-+function matchesDocument(editor: Editor, markdown: string, alternative?: string): boolean {
++/** The blocks a Markdown text loads as, without the paragraphs that stand for blank lines. */
++function parseBlocks(editor: Editor, markdown: string): JSONContent[] | null {
 +  const manager = managerOf(editor);
-+  if (typeof manager?.parse !== 'function') return false;
-+  try {
-+    const candidate = fingerprint(editor, manager.parse(markdown));
-+    if (candidate === JSON.stringify(stripEmptyDocParagraphsFromJson(editor.state.doc.toJSON()))) {
-+      return true;
-+    }
-+    return alternative !== undefined && candidate === fingerprint(editor, manager.parse(alternative));
-+  } catch {
-+    return false;
-+  }
++  if (typeof manager?.parse !== 'function') return null;
++  return stripEmptyDocParagraphsFromJson(manager.parse(markdown)).content ?? [];
 +}
 +
 +/** Publish the bridge on `window.visualMarkdownEditor`. */
 +export function installHostBridge(getEditor: () => Editor | null): void {
++  // The document `currentBlocks` last listed, and where each listed block sits in it.
++  let listed: { doc: ProseMirrorNode; indexes: number[] } | null = null;
++
 +  const bridge: HostBridge = {
 +    describeBlocks: () => {
 +      const editor = getEditor();
 +      return editor ? describeBlocks(editor) : null;
 +    },
-+    matchesDocument: (markdown, alternative) => {
++    currentBlocks: () => {
 +      const editor = getEditor();
-+      return editor ? matchesDocument(editor, markdown, alternative) : false;
++      const blocks = editor ? listSyncBlocks(editor) : null;
++      if (!editor || !blocks) {
++        listed = null;
++        return null;
++      }
++      listed = { doc: editor.state.doc, indexes: blocks.map(block => block.index) };
++      return blocks.map(block => block.markdown);
++    },
++    matchesBlocks: (from, to, markdown, alternative) => {
++      const editor = getEditor();
++      if (!editor || !listed || listed.doc !== editor.state.doc) return false;
++      const count = to - from;
++      if (!(from >= 0 && count > 0 && to <= listed.indexes.length)) return false;
++      try {
++        const parsed = parseBlocks(editor, markdown);
++        if (!parsed || parsed.length < count) return false;
++        const nodes = parsed.slice(0, count).map(json => editor.schema.nodeFromJSON(json));
++        const live = listed;
++        if (nodes.every((node, offset) => node.eq(live.doc.child(live.indexes[from + offset])))) {
++          return true;
++        }
++        if (alternative === undefined) return false;
++        const other = parseBlocks(editor, alternative);
++        if (!other || other.length < count) return false;
++        return nodes.every((node, offset) => node.eq(editor.schema.nodeFromJSON(other[offset])));
++      } catch {
++        return false;
++      }
++    },
++    matchesDocument: markdown => {
++      const editor = getEditor();
++      if (!editor) return false;
++      try {
++        const parsed = parseBlocks(editor, markdown);
++        if (!parsed) return false;
++        const wanted = (editor.state.doc.toJSON() as JSONContent).content ?? [];
++        const live = stripEmptyDocParagraphsFromJson({ type: 'doc', content: wanted }).content ?? [];
++        if (parsed.length !== live.length) return false;
++        return parsed.every((json, index) =>
++          editor.schema.nodeFromJSON(json).eq(editor.schema.nodeFromJSON(live[index]))
++        );
++      } catch {
++        return false;
++      }
 +    },
 +  };
 +  (window as unknown as { visualMarkdownEditor?: HostBridge }).visualMarkdownEditor = bridge;
 +}
+diff --git a/src/webview/utils/markdownSerialization.ts b/src/webview/utils/markdownSerialization.ts
+index 632b81e..3dda43f 100644
+--- a/src/webview/utils/markdownSerialization.ts
++++ b/src/webview/utils/markdownSerialization.ts
+@@ -719,6 +719,37 @@ export function listRememberedBlockSources(editor: Editor): RememberedBlockSourc
+   return remembered;
+ }
+ 
++/**
++ * Added by Visual Markdown: each top-level block's Markdown exactly as the next sync writes
++ * it, with the block's index in the document. Blank-line paragraphs are left out.
++ *
++ * @param editor - Editor loaded with {@link setMarkdownContentPreservingSource}
++ * @returns null when the editor has no Markdown serializer
++ */
++export function listSyncBlocks(editor: Editor): { index: number; markdown: string }[] | null {
++  const manager = getMarkdownManager(editor);
++  const documentNode = getEditorDocument(editor);
++  if (!manager?.serialize || documentNode === null) return null;
++  patchMarkdownSerialization(manager);
++
++  const serialize = manager.serialize.bind(manager);
++  const cache = getEditorBlockCache(editor, manager.serialize);
++  const blocks: { index: number; markdown: string }[] = [];
++  for (let index = 0; index < documentNode.childCount; index++) {
++    const node = documentNode.child(index);
++    const cached = cache.blocks.get(node);
++    const remembered = cache.sources[index];
++    const markdown =
++      cached !== undefined
++        ? cached.markdown
++        : remembered !== undefined && remembered.node.eq?.(node)
++          ? remembered.block.markdown
++          : serializeBlockMarkdown(node.toJSON(), serialize);
++    if (markdown !== '') blocks.push({ index, markdown });
++  }
++  return blocks;
++}
++
+ function getMarkdownManager(editor: Editor): MarkdownManager | undefined {
+   const editorUnknown = editor as unknown as {
+     markdown?: MarkdownManager;

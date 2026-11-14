@@ -229358,6 +229358,23 @@ ${code3}
     }
     return remembered;
   }
+  function listSyncBlocks(editor2) {
+    const manager = getMarkdownManager(editor2);
+    const documentNode = getEditorDocument(editor2);
+    if (!manager?.serialize || documentNode === null) return null;
+    patchMarkdownSerialization(manager);
+    const serialize2 = manager.serialize.bind(manager);
+    const cache3 = getEditorBlockCache(editor2, manager.serialize);
+    const blocks2 = [];
+    for (let index = 0; index < documentNode.childCount; index++) {
+      const node2 = documentNode.child(index);
+      const cached = cache3.blocks.get(node2);
+      const remembered = cache3.sources[index];
+      const markdown = cached !== void 0 ? cached.markdown : remembered !== void 0 && remembered.node.eq?.(node2) ? remembered.block.markdown : serializeBlockMarkdown(node2.toJSON(), serialize2);
+      if (markdown !== "") blocks2.push({ index, markdown });
+    }
+    return blocks2;
+  }
   function getMarkdownManager(editor2) {
     const editorUnknown = editor2;
     return editorUnknown.markdown || editorUnknown.storage?.markdown;
@@ -234522,32 +234539,64 @@ ${template.diagram}
     }
     return blocks2;
   }
-  function fingerprint(editor2, json3) {
-    const normalized2 = editor2.schema.nodeFromJSON(json3).toJSON();
-    return JSON.stringify(stripEmptyDocParagraphsFromJson(normalized2));
-  }
-  function matchesDocument2(editor2, markdown, alternative) {
+  function parseBlocks(editor2, markdown) {
     const manager = managerOf(editor2);
-    if (typeof manager?.parse !== "function") return false;
-    try {
-      const candidate = fingerprint(editor2, manager.parse(markdown));
-      if (candidate === JSON.stringify(stripEmptyDocParagraphsFromJson(editor2.state.doc.toJSON()))) {
-        return true;
-      }
-      return alternative !== void 0 && candidate === fingerprint(editor2, manager.parse(alternative));
-    } catch {
-      return false;
-    }
+    if (typeof manager?.parse !== "function") return null;
+    return stripEmptyDocParagraphsFromJson(manager.parse(markdown)).content ?? [];
   }
   function installHostBridge(getEditor) {
+    let listed = null;
     const bridge = {
       describeBlocks: () => {
         const editor2 = getEditor();
         return editor2 ? describeBlocks(editor2) : null;
       },
-      matchesDocument: (markdown, alternative) => {
+      currentBlocks: () => {
         const editor2 = getEditor();
-        return editor2 ? matchesDocument2(editor2, markdown, alternative) : false;
+        const blocks2 = editor2 ? listSyncBlocks(editor2) : null;
+        if (!editor2 || !blocks2) {
+          listed = null;
+          return null;
+        }
+        listed = { doc: editor2.state.doc, indexes: blocks2.map((block3) => block3.index) };
+        return blocks2.map((block3) => block3.markdown);
+      },
+      matchesBlocks: (from3, to, markdown, alternative) => {
+        const editor2 = getEditor();
+        if (!editor2 || !listed || listed.doc !== editor2.state.doc) return false;
+        const count2 = to - from3;
+        if (!(from3 >= 0 && count2 > 0 && to <= listed.indexes.length)) return false;
+        try {
+          const parsed = parseBlocks(editor2, markdown);
+          if (!parsed || parsed.length < count2) return false;
+          const nodes5 = parsed.slice(0, count2).map((json3) => editor2.schema.nodeFromJSON(json3));
+          const live = listed;
+          if (nodes5.every((node2, offset) => node2.eq(live.doc.child(live.indexes[from3 + offset])))) {
+            return true;
+          }
+          if (alternative === void 0) return false;
+          const other = parseBlocks(editor2, alternative);
+          if (!other || other.length < count2) return false;
+          return nodes5.every((node2, offset) => node2.eq(editor2.schema.nodeFromJSON(other[offset])));
+        } catch {
+          return false;
+        }
+      },
+      matchesDocument: (markdown) => {
+        const editor2 = getEditor();
+        if (!editor2) return false;
+        try {
+          const parsed = parseBlocks(editor2, markdown);
+          if (!parsed) return false;
+          const wanted = editor2.state.doc.toJSON().content ?? [];
+          const live = stripEmptyDocParagraphsFromJson({ type: "doc", content: wanted }).content ?? [];
+          if (parsed.length !== live.length) return false;
+          return parsed.every(
+            (json3, index) => editor2.schema.nodeFromJSON(json3).eq(editor2.schema.nodeFromJSON(live[index]))
+          );
+        } catch {
+          return false;
+        }
       }
     };
     window.visualMarkdownEditor = bridge;
@@ -237228,16 +237277,16 @@ ${text5}
     return shape;
   }
   function fingerprintFeedbackTable(input) {
-    let fingerprint2 = tableFingerprintCache.get(input.table);
-    if (fingerprint2 === void 0) {
+    let fingerprint = tableFingerprintCache.get(input.table);
+    if (fingerprint === void 0) {
       const canonical = canonicalJson({ version: input.version, table: input.table.toJSON() });
-      fingerprint2 = `md4h-table/v1:${fnv1a64(canonical)}`;
-      tableFingerprintCache.set(input.table, fingerprint2);
+      fingerprint = `md4h-table/v1:${fnv1a64(canonical)}`;
+      tableFingerprintCache.set(input.table, fingerprint);
     }
     return {
       version: 1,
       tableOrdinal: input.tableOrdinal,
-      fingerprint: fingerprint2
+      fingerprint
     };
   }
   function validateFeedbackCellTarget(doc3, target) {
@@ -237614,7 +237663,7 @@ ${text5}
           value: { top: 0, bottom: map8.height, left: cell.left, right: cell.right }
         }
       ];
-      const fingerprint2 = fingerprintFeedbackTable({
+      const fingerprint = fingerprintFeedbackTable({
         version: 1,
         tableOrdinal: anchor2.ordinal,
         table: table2
@@ -237624,7 +237673,7 @@ ${text5}
           version: 1,
           tableOrdinal: anchor2.ordinal,
           rectangle: value2,
-          tableFingerprint: fingerprint2
+          tableFingerprint: fingerprint
         };
         const evidence = buildFeedbackTableCellEvidence(doc3, cellTarget2);
         if (!evidence) return [];

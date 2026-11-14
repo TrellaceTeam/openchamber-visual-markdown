@@ -15,10 +15,13 @@
 import { applyBlankLinePolicy, type BlankLineMode } from '@upstream/shared/blankLinePolicy';
 import { hasSameBlankLineLayout, isMarkdownStructurallyEquivalent } from '@upstream/editor/markdownAstEquivalence';
 import { frontmatterIsTight, tightenFrontmatter, unwrapFrontmatter, wrapFrontmatter } from './frontmatter';
-import { mergeKeepingStyle, planOrigin, type LoadedBlock, type Origin, type Validate } from './styleMerge';
+import { mergeKeepingStyle, planOrigin, type EditorCheck, type LoadedBlock, type Origin } from './styleMerge';
 
-/** Above this size the "is it back to the saved text" check waits until typing pauses. */
-export const SETTLE_INLINE_MAX = 200_000;
+/**
+ * Above this size, the costly work on each edit (merging, comparing) waits until typing
+ * pauses. Measured on a 100 KB file it took about a tenth of a second per edit.
+ */
+export const SETTLE_INLINE_MAX = 50_000;
 
 export type EditOutcome = 'unchanged' | 'changed';
 
@@ -38,7 +41,7 @@ export class DocumentHost {
   /** The editor's latest text, when merging it was put off. */
   private unmerged: string | null = null;
   private origin: Origin | null = null;
-  private validate: Validate | null = null;
+  private editor: EditorCheck | null = null;
   private readonly mode: BlankLineMode;
   private readonly sameRendering: (a: string, b: string) => boolean;
 
@@ -90,14 +93,14 @@ export class DocumentHost {
    * is kept, so untouched parts of the file keep the bytes they had.
    */
   applyEditorContent(editorContent: string): EditOutcome {
-    // Merging and rendering are the costly steps. A large document that is already being
-    // edited takes the editor's text as it comes, and settle() does the work once typing pauses.
+    // Merging and comparing are the costly steps. A large document takes the editor's text
+    // as it comes, and settle() does the work once typing pauses.
     const large = editorContent.length > SETTLE_INLINE_MAX;
-    const deferred = large && this.dirty;
+    const deferred = large && (this.dirty || this.origin !== null);
     this.unmerged = deferred ? editorContent : null;
     const next = this.normalize(deferred ? editorContent : this.withAuthorStyle(editorContent));
     if (next === this.current) return 'unchanged';
-    if (!deferred && this.equivalent(next, this.current)) return 'unchanged';
+    if (!deferred && this.sameAs(next, this.current)) return 'unchanged';
 
     this.current = next;
     this.revision += 1;
@@ -125,10 +128,21 @@ export class DocumentHost {
         changed = true;
       }
     }
-    if (this.current === this.saved || !this.equivalent(this.current, this.saved)) return changed;
+    if (this.current === this.saved || !this.sameAs(this.current, this.saved)) return changed;
     this.current = this.saved;
     this.revision += 1;
     return true;
+  }
+
+  /**
+   * Whether two texts that differ are still the same document.
+   *
+   * With the editor's blocks known, the merge has already put back every byte the person did
+   * not change, so texts that differ are different documents. Without them, the editor's
+   * text is in its own style throughout, and the two are compared by what they render to.
+   */
+  private sameAs(a: string, b: string): boolean {
+    return this.origin === null && this.equivalent(a, b);
   }
 
   /** A snapshot with this text reached the disk. */
@@ -155,21 +169,21 @@ export class DocumentHost {
    * is saved the way the editor writes it.
    *
    * @param blocks - the editor's top-level blocks, or null when it cannot say
-   * @param validate - whether a text loads as the document on screen
+   * @param editor - the editor's blocks as they stand later, and its check of a merged block
    */
-  setOrigin(blocks: readonly LoadedBlock[] | null | undefined, validate: Validate | null): void {
-    this.validate = validate;
+  setOrigin(blocks: readonly LoadedBlock[] | null | undefined, editor: EditorCheck | null): void {
+    this.editor = editor;
     try {
-      this.origin = validate ? planOrigin(this.contentForEditor(), blocks) : null;
+      this.origin = editor ? planOrigin(this.contentForEditor(), blocks) : null;
     } catch {
       this.origin = null;
     }
   }
 
   private withAuthorStyle(editorContent: string): string {
-    if (!this.origin || !this.validate) return editorContent;
+    if (!this.origin || !this.editor) return editorContent;
     try {
-      return mergeKeepingStyle(this.origin, editorContent, this.validate);
+      return mergeKeepingStyle(this.origin, editorContent, this.editor);
     } catch {
       // The editor's own text is always a correct thing to save.
       return editorContent;

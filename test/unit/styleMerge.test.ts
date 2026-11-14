@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { diff3, lcsMap } from '../../src/shim/diff3';
-import { harmonizeListMarkers, mergeCharacters, mergeKeepingStyle, planOrigin, splitLines, type LoadedBlock } from '../../src/shim/styleMerge';
+import { harmonizeListMarkers, mergeCharacters, mergeKeepingStyle, placeBlocks, planOrigin, splitLines, type EditorCheck, type LoadedBlock } from '../../src/shim/styleMerge';
 
 const codes = (text: string): number[] => [...text].map((character) => character.charCodeAt(0));
 
@@ -72,8 +72,27 @@ test('splitLines keeps line endings so the text can be put back together', () =>
   assert.deepEqual(splitLines('a\nb'), ['a\n', 'b']);
 });
 
-const accept = (): boolean => true;
 const block = (source: string | null, serialized: string): LoadedBlock => ({ source, serialized });
+
+/**
+ * A stand-in for the editor: the blocks its text is made of, and a check that accepts every
+ * merged block unless `reject` says no. `seen` records what was checked.
+ */
+const editorWith = (blocks: readonly string[], reject: (markdown: string) => boolean = () => false): EditorCheck & { seen: Array<{ from: number; to: number; markdown: string }> } => {
+  const seen: Array<{ from: number; to: number; markdown: string }> = [];
+  return {
+    seen,
+    currentBlocks: () => blocks,
+    matchesBlocks: (from, to, markdown, alternative) => {
+      assert.equal(typeof alternative, 'string');
+      seen.push({ from, to, markdown });
+      return !reject(markdown);
+    },
+  };
+};
+
+/** The blocks of a text whose blocks are separated by one blank line. */
+const blocksOf = (text: string): string[] => text.trimEnd().split('\n\n');
 
 test('planOrigin places each block on its lines', () => {
   const content = '# Title\n\n* one\n* two\n\nEnd.\n';
@@ -102,66 +121,96 @@ test('planOrigin gives up when a block is not in the text', () => {
   assert.equal(planOrigin('Hello.\n', []), null);
 });
 
+test('placeBlocks finds each block in order, even when two read the same', () => {
+  const text = 'Same.\n\n- a\n- b\n\nSame.\n';
+  assert.deepEqual(placeBlocks(text, splitLines(text), ['Same.', '- a\n- b', 'Same.']), [
+    { start: 0, end: 1 },
+    { start: 2, end: 4 },
+    { start: 5, end: 6 },
+  ]);
+  assert.equal(placeBlocks(text, splitLines(text), ['Same.', 'Missing.']), null);
+});
+
 test('mergeKeepingStyle keeps the author markers when one item is edited', () => {
   const content = '# T\n\n* first item\n* second item\n* third item\n\nEnd.\n';
   const origin = planOrigin(content, [block('# T', '# T'), block('* first item\n* second item\n* third item', '- first item\n- second item\n- third item'), block('End.', 'End.')]);
   const theirs = '# T\n\n- first item\n- Zqsecond item\n- third item\n\nEnd.\n';
-  assert.equal(mergeKeepingStyle(origin, theirs, accept), '# T\n\n* first item\n* Zqsecond item\n* third item\n\nEnd.\n');
+  const editor = editorWith(blocksOf(theirs));
+  assert.equal(mergeKeepingStyle(origin, theirs, editor), '# T\n\n* first item\n* Zqsecond item\n* third item\n\nEnd.\n');
+  // Only the edited block was checked, not the whole file.
+  assert.deepEqual(editor.seen, [{ from: 1, to: 2, markdown: '* first item\n* Zqsecond item\n* third item\n' }]);
 });
 
 test('mergeKeepingStyle keeps soft line breaks in a hand-wrapped paragraph', () => {
   const content = 'This paragraph is wrapped\nby hand in the source\nand must stay so.\n';
   const origin = planOrigin(content, [block(content.trimEnd(), 'This paragraph is wrapped  \nby hand in the source  \nand must stay so.')]);
   const theirs = 'This paragraph is wrapped  \nby hand in the Zqsource  \nand must stay so.\n';
-  assert.equal(mergeKeepingStyle(origin, theirs, accept), 'This paragraph is wrapped\nby hand in the Zqsource\nand must stay so.\n');
+  assert.equal(mergeKeepingStyle(origin, theirs, editorWith(blocksOf(theirs))), 'This paragraph is wrapped\nby hand in the Zqsource\nand must stay so.\n');
 });
 
 test('mergeKeepingStyle keeps blank lines between loose list items', () => {
   const content = '- first\n\n- second\n\n- third\n';
   const origin = planOrigin(content, [block(content.trimEnd(), '- first\n- second\n- third')]);
-  assert.equal(mergeKeepingStyle(origin, '- first\n- Zqsecond\n- third\n', accept), '- first\n\n- Zqsecond\n\n- third\n');
+  const theirs = '- first\n- Zqsecond\n- third\n';
+  assert.equal(mergeKeepingStyle(origin, theirs, editorWith([theirs.trimEnd()])), '- first\n\n- Zqsecond\n\n- third\n');
 });
 
 test('mergeKeepingStyle writes an added item with the list marker in use', () => {
   const content = '* one\n* two\n';
   const origin = planOrigin(content, [block('* one\n* two', '- one\n- two')]);
-  // A list that mixes markers is two lists, so the plain merge is not the document on screen.
-  const validate = (candidate: string): boolean => !/^\*/m.test(candidate) || !/^-/m.test(candidate);
-  assert.equal(mergeKeepingStyle(origin, '- one\n- two\n- three\n', validate), '* one\n* two\n* three\n');
+  const theirs = '- one\n- two\n- three\n';
+  // A list that mixes markers is two lists, so the plain merge is not the block on screen.
+  const editor = editorWith([theirs.trimEnd()], (markdown) => /^\*/m.test(markdown) && /^-/m.test(markdown));
+  assert.equal(mergeKeepingStyle(origin, theirs, editor), '* one\n* two\n* three\n');
 });
 
 test('mergeKeepingStyle drops a deleted item and renumbers in the author style', () => {
   const content = '1) first item\n2) second item\n3) third item\n';
   const origin = planOrigin(content, [block(content.trimEnd(), '1. first item\n2. second item\n3. third item')]);
-  assert.equal(mergeKeepingStyle(origin, '1. first item\n2. third item\n', accept), '1) first item\n2) third item\n');
+  const theirs = '1. first item\n2. third item\n';
+  assert.equal(mergeKeepingStyle(origin, theirs, editorWith([theirs.trimEnd()])), '1) first item\n2) third item\n');
 });
 
 test('mergeKeepingStyle drops the blank line that went with a deleted loose item', () => {
   const content = '- first\n\n- second\n\n- third\n';
   const origin = planOrigin(content, [block(content.trimEnd(), '- first\n- second\n- third')]);
-  assert.equal(mergeKeepingStyle(origin, '- first\n- third\n', accept), '- first\n\n- third\n');
+  const theirs = '- first\n- third\n';
+  assert.equal(mergeKeepingStyle(origin, theirs, editorWith([theirs.trimEnd()])), '- first\n\n- third\n');
 });
 
 test('mergeKeepingStyle leaves untouched blocks and plain additions alone', () => {
   const content = '* one\n* two\n\nPara.\n';
   const origin = planOrigin(content, [block('* one\n* two', '- one\n- two'), block('Para.', 'Para.')]);
-  assert.equal(mergeKeepingStyle(origin, '* one\n* two\n\nPara. More.\n', accept), '* one\n* two\n\nPara. More.\n');
-  assert.equal(mergeKeepingStyle(origin, '* one\n* two\n\nPara.\n\nNew block.\n', accept), '* one\n* two\n\nPara.\n\nNew block.\n');
-  assert.equal(mergeKeepingStyle(origin, content, accept), content);
+  for (const theirs of ['* one\n* two\n\nPara. More.\n', '* one\n* two\n\nPara.\n\nNew block.\n', content]) {
+    const editor = editorWith(blocksOf(theirs));
+    assert.equal(mergeKeepingStyle(origin, theirs, editor), theirs);
+    assert.deepEqual(editor.seen, [], 'nothing to put back, so nothing to check');
+  }
 });
 
-test('mergeKeepingStyle falls back to the editor text when nothing validates', () => {
+test('mergeKeepingStyle falls back to the editor text for a block that fails the check', () => {
+  const content = '* one\n* two\n\n1) alpha\n2) beta\n';
+  const origin = planOrigin(content, [block('* one\n* two', '- one\n- two'), block('1) alpha\n2) beta', '1. alpha\n2. beta')]);
+  const theirs = '- one\n- Zqtwo\n\n1. alpha\n2. Zqbeta\n';
+  // The first block fails the check however it is merged. The second block is still merged.
+  const editor = editorWith(blocksOf(theirs), (markdown) => markdown.includes('one'));
+  assert.equal(mergeKeepingStyle(origin, theirs, editor), '- one\n- Zqtwo\n\n1) alpha\n2) Zqbeta\n');
+  assert.equal(mergeKeepingStyle(origin, theirs, editorWith(blocksOf(theirs), () => true)), theirs);
+  assert.equal(mergeKeepingStyle(null, theirs, editor), theirs);
+});
+
+test('mergeKeepingStyle gives the editor text back when its blocks are from another moment', () => {
   const content = '* one\n* two\n';
   const origin = planOrigin(content, [block('* one\n* two', '- one\n- two')]);
   const theirs = '- one\n- Zqtwo\n';
-  assert.equal(mergeKeepingStyle(origin, theirs, () => false), theirs);
-  assert.equal(mergeKeepingStyle(null, theirs, accept), theirs);
+  assert.equal(mergeKeepingStyle(origin, theirs, editorWith(['- one\n- Zqtwo and more typed since'])), theirs);
+  assert.equal(mergeKeepingStyle(origin, theirs, { currentBlocks: () => null, matchesBlocks: () => true }), theirs);
 });
 
 test('mergeKeepingStyle keeps a file with no final newline that way', () => {
   const content = '* one\n* two';
   const origin = planOrigin(content, [block('* one\n* two', '- one\n- two')]);
-  assert.equal(mergeKeepingStyle(origin, '- one\n- Zqtwo', accept), '* one\n* Zqtwo');
+  assert.equal(mergeKeepingStyle(origin, '- one\n- Zqtwo', editorWith(['- one\n- Zqtwo'])), '* one\n* Zqtwo');
 });
 
 test('mergeKeepingStyle keeps a compact table compact when a cell grows', () => {
@@ -169,5 +218,29 @@ test('mergeKeepingStyle keeps a compact table compact when a cell grows', () => 
   const canonical = '| Name  | Role     |\n| ----- | -------- |\n| Ada   | Engineer |\n| Grace | Admiral  |';
   const origin = planOrigin(content, [block(content.trimEnd(), canonical)]);
   const theirs = '| Name    | Role     |\n| ------- | -------- |\n| Ada     | Engineer |\n| ZqGrace | Admiral  |\n';
-  assert.equal(mergeKeepingStyle(origin, theirs, accept), 'Name|Role\n-|-\nAda|Engineer\nZqGrace|Admiral\n');
+  assert.equal(mergeKeepingStyle(origin, theirs, editorWith([theirs.trimEnd()])), 'Name|Role\n-|-\nAda|Engineer\nZqGrace|Admiral\n');
+});
+
+test('mergeKeepingStyle checks a block that uses a link definition together with the definitions', () => {
+  const content = 'A [link][site] with a tail.\n\n[site]: https://example.com\n';
+  const origin = planOrigin(content, [block('A [link][site] with a tail.', 'A [link](https://example.com) with a tail.'), block('[site]: https://example.com', '[site]: https://example.com')]);
+  const theirs = 'A [link](https://example.com) with a Zqtail.\n\n[site]: https://example.com\n';
+  const editor = editorWith(blocksOf(theirs));
+  assert.equal(mergeKeepingStyle(origin, theirs, editor), 'A [link][site] with a Zqtail.\n\n[site]: https://example.com\n');
+  assert.equal(editor.seen[0].markdown, 'A [link][site] with a Zqtail.\n\n\n[site]: https://example.com\n');
+});
+
+test('mergeKeepingStyle handles a long document with one edit quickly', () => {
+  const paragraphs = Array.from({ length: 4000 }, (_, index) => `* point ${index}\n* another point ${index}`);
+  const content = `${paragraphs.join('\n\n')}\n`;
+  const origin = planOrigin(content, paragraphs.map((source) => block(source, source.replace(/^\*/gm, '-'))));
+  const edited = [...paragraphs];
+  edited[2000] = '- point 2000\n- Zqanother point 2000';
+  const theirs = `${edited.join('\n\n')}\n`;
+  const editor = editorWith(edited);
+  const started = Date.now();
+  const result = mergeKeepingStyle(origin, theirs, editor);
+  assert.ok(Date.now() - started < 1500, `took ${Date.now() - started} ms`);
+  assert.equal(result, content.replace('another point 2000', 'Zqanother point 2000'));
+  assert.equal(editor.seen.length, 1);
 });

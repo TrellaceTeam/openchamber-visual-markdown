@@ -45,8 +45,20 @@ export interface Origin {
   readonly entries: readonly OriginEntry[];
 }
 
-/** Says whether a candidate text loads as the document on screen (or, failing that, as `alternative` loads). */
-export type Validate = (candidate: string, alternative: string) => boolean;
+/** What the merge asks the editor (see patches/0004-host-bridge.patch). */
+export interface EditorCheck {
+  /** The Markdown of each block now, exactly as the editor writes it, in document order. */
+  currentBlocks: () => readonly string[] | null;
+  /**
+   * Whether `markdown` loads as blocks `from` up to `to` of that list or, failing that, as
+   * `alternative` loads. Anything either holds after those blocks is ignored.
+   *
+   * `alternative` is the editor's own text for the same blocks. The editor's text does not
+   * always load back as what is on screen: a space typed before a line break is one case.
+   * A merged text that loads the same as it is no worse than what would have been saved.
+   */
+  matchesBlocks: (from: number, to: number, markdown: string, alternative: string) => boolean;
+}
 
 /** Above these sizes the merge is skipped and the editor's text is used. */
 export const MAX_LINE_DIFFERENCE = 2500;
@@ -64,16 +76,8 @@ export function splitLines(text: string): string[] {
 
 const isBlank = (line: string): boolean => line.trim() === '';
 
-/**
- * Work out where each loaded block sits in the loaded text.
- *
- * @param content - the text the editor loaded
- * @param blocks - the editor's blocks, in document order
- * @returns null when the blocks cannot be matched to the text, in which case nothing is merged
- */
-export function planOrigin(content: string, blocks: readonly LoadedBlock[] | null | undefined): Origin | null {
-  if (!blocks || blocks.length === 0) return null;
-  const lines = splitLines(content);
+/** Finds where blocks sit in a text, one after another. */
+function blockFinder(content: string, lines: readonly string[]): (block: string, from: number) => { start: number; end: number; after: number } | null {
   const lineStarts: number[] = [];
   let offset = 0;
   for (const line of lines) {
@@ -90,6 +94,51 @@ export function planOrigin(content: string, blocks: readonly LoadedBlock[] | nul
     }
     return low;
   };
+  return (block, from) => {
+    // A block starts a line and ends one. Skip matches that are part of something else.
+    let found = content.indexOf(block, from);
+    while (found >= 0) {
+      const lineStart = content.lastIndexOf('\n', found - 1) + 1;
+      const after = found + block.length;
+      const lineEnd = content.indexOf('\n', after);
+      const startsLine = content.slice(lineStart, found).trim() === '';
+      const endsLine = content.slice(after, lineEnd < 0 ? content.length : lineEnd).trim() === '';
+      if (startsLine && endsLine) return { start: lineAt(found), end: lineAt(Math.max(found, after - 1)) + 1, after };
+      found = content.indexOf(block, found + 1);
+    }
+    return null;
+  };
+}
+
+/**
+ * Where each of the editor's current blocks sits in the editor's text, as line ranges.
+ *
+ * @returns null when a block is not in the text, which means the two are from different moments
+ */
+export function placeBlocks(text: string, lines: readonly string[], blocks: readonly string[]): Array<{ start: number; end: number }> | null {
+  const find = blockFinder(text, lines);
+  const placed: Array<{ start: number; end: number }> = [];
+  let cursor = 0;
+  for (const block of blocks) {
+    const at = find(block, cursor);
+    if (!at) return null;
+    placed.push({ start: at.start, end: at.end });
+    cursor = at.after;
+  }
+  return placed;
+}
+
+/**
+ * Work out where each loaded block sits in the loaded text.
+ *
+ * @param content - the text the editor loaded
+ * @param blocks - the editor's blocks, in document order
+ * @returns null when the blocks cannot be matched to the text, in which case nothing is merged
+ */
+export function planOrigin(content: string, blocks: readonly LoadedBlock[] | null | undefined): Origin | null {
+  if (!blocks || blocks.length === 0) return null;
+  const lines = splitLines(content);
+  const find = blockFinder(content, lines);
 
   const entries: OriginEntry[] = [];
   let cursor = 0; // character offset after the last placed block
@@ -112,22 +161,12 @@ export function planOrigin(content: string, blocks: readonly LoadedBlock[] | nul
       waiting.push(block.serialized);
       continue;
     }
-    // The block starts a line and ends one. Skip matches that are part of something else.
-    let found = content.indexOf(block.source, cursor);
-    while (found >= 0) {
-      const startsLine = found === 0 || content[found - 1] === '\n' || content.slice(content.lastIndexOf('\n', found - 1) + 1, found).trim() === '';
-      const after = found + block.source.length;
-      const endsLine = after === content.length || content[after] === '\n' || content.slice(after, content.indexOf('\n', after) < 0 ? content.length : content.indexOf('\n', after)).trim() === '';
-      if (startsLine && endsLine) break;
-      found = content.indexOf(block.source, found + 1);
-    }
-    if (found < 0) return null;
-    const start = lineAt(found);
-    const end = lineAt(Math.max(found, found + block.source.length - 1)) + 1;
-    placeWaiting(start);
-    entries.push({ start, end, canonical: block.serialized });
-    cursor = found + block.source.length;
-    cursorLine = end;
+    const at = find(block.source, cursor);
+    if (!at) return null;
+    placeWaiting(at.start);
+    entries.push({ start: at.start, end: at.end, canonical: block.serialized });
+    cursor = at.after;
+    cursorLine = at.end;
   }
   placeWaiting(lines.length);
   return { content, lines, entries };
@@ -243,13 +282,6 @@ export function harmonizeListMarkers(lines: readonly string[]): string[] {
   });
 }
 
-interface Piece {
-  /** The lines to write. */
-  readonly lines: readonly string[];
-  /** Set for a stretch both sides changed: the editor's own lines, and whether characters were merged. */
-  readonly conflict?: { readonly theirs: readonly string[]; readonly fine: boolean };
-}
-
 /** A line with its spacing removed, and the dashes of a table's divider row counted as one. */
 const withoutPadding = (line: string): string => {
   const squeezed = line.replace(/\s+/g, '');
@@ -325,26 +357,49 @@ function mergeByPairing(o: readonly string[], a: readonly string[], b: readonly 
   return lines;
 }
 
-/** Merge a stretch of lines both sides changed. */
-function mergeConflict(o: readonly string[], a: readonly string[], b: readonly string[]): Piece {
+/** Merge a stretch of lines both sides changed. Returns null when the editor's lines are all there is. */
+function mergeConflict(o: readonly string[], a: readonly string[], b: readonly string[]): string[] | null {
   if (o.length === a.length && a.length === b.length) {
     // Same number of lines on all sides: settle it line by line.
-    return { lines: o.map((base, index) => mergeLine(base, a[index], b[index])), conflict: { theirs: b, fine: true } };
+    return o.map((base, index) => mergeLine(base, a[index], b[index]));
   }
   const merged = mergeCharacters(o.join(''), a.join(''), b.join(''));
-  const lines = merged === null ? mergeByPairing(o, a, b) : splitLines(merged);
-  return lines === null ? { lines: b } : { lines, conflict: { theirs: b, fine: true } };
+  return merged === null ? mergeByPairing(o, a, b) : splitLines(merged);
 }
+
+const sameLines = (x: readonly string[], y: readonly string[]): boolean => x.length === y.length && x.every((value, index) => value === y[index]);
+
+/** A stretch of the result, and the stretch of the editor's text it stands for. */
+interface Piece {
+  /** Lines of the editor's text this covers: [start, end). */
+  readonly start: number;
+  readonly end: number;
+  /** What to write for it. For `same` these are the editor's own lines. */
+  readonly lines: readonly string[];
+  /**
+   * same    the editor's own lines
+   * ours    the author's lines, where the person changed nothing
+   * merged  the author's lines with the person's change worked in
+   */
+  readonly kind: 'same' | 'ours' | 'merged';
+}
+
+/** Link and footnote definitions. A block that uses one only reads the same with them present. */
+const DEFINITION = /^ {0,3}\[[^\]\n]+\]:/;
 
 /**
  * The editor's text with the author's style put back where the person changed nothing.
  *
+ * Each edited block is checked on its own: the merged block is kept only when the editor
+ * reads it back as the block on screen. A block that fails the check is written the way the
+ * editor wrote it, and the other blocks are not affected.
+ *
  * @param origin - the loaded text and its blocks, from {@link planOrigin}
- * @param theirs - the editor's text now
- * @param validate - accepts a candidate only when it loads as the document on screen
- * @returns the text to keep: a merged text, or `theirs` when no merge could be confirmed
+ * @param editorText - the editor's text now
+ * @param editor - the editor's blocks as they stand, and its check
+ * @returns the text to keep: `editorText` itself when there is nothing to put back
  */
-export function mergeKeepingStyle(origin: Origin | null, editorText: string, validate: Validate): string {
+export function mergeKeepingStyle(origin: Origin | null, editorText: string, editor: EditorCheck): string {
   if (!origin || editorText === origin.content) return editorText;
 
   // The editor's text has no newline at its end. Give it the one the loaded text has, so
@@ -357,8 +412,9 @@ export function mergeKeepingStyle(origin: Origin | null, editorText: string, val
   const theirLines = splitLines(theirs);
   const table = new Map<string, number>();
   const ourIds = idsOf(ours, table);
-  const toTheirs = lcsMap(ourIds, idsOf(theirLines, table), MAX_LINE_DIFFERENCE);
-  if (!toTheirs) return theirs;
+  const theirIds = idsOf(theirLines, table);
+  const toTheirs = lcsMap(ourIds, theirIds, MAX_LINE_DIFFERENCE);
+  if (!toTheirs) return editorText;
 
   // Lines of the loaded text that are gone or changed, and places where lines were added.
   const insertedBefore = new Uint8Array(ours.length + 1);
@@ -368,7 +424,6 @@ export function mergeKeepingStyle(origin: Origin | null, editorText: string, val
     if (toTheirs[index] > expected) insertedBefore[index] = 1;
     expected = toTheirs[index] + 1;
   }
-  if (expected < theirLines.length) insertedBefore[ours.length] = 1;
 
   const touched = origin.entries.filter((entry) => {
     for (let line = entry.start; line < entry.end; line += 1) {
@@ -377,16 +432,16 @@ export function mergeKeepingStyle(origin: Origin | null, editorText: string, val
     }
     return false;
   });
-  if (touched.length === 0 || touched.length > MAX_TOUCHED_ENTRIES) return theirs;
+  if (touched.length === 0 || touched.length > MAX_TOUCHED_ENTRIES) return editorText;
 
   // The base: the loaded text, with each touched block written the editor's way.
   const base: string[] = [];
   let line = 0;
   for (const entry of touched) {
     for (; line < entry.start; line += 1) base.push(ours[line]);
-    const ending = ours[entry.end - 1].endsWith('\n') ? '\n' : '';
+    const lineEnding = ours[entry.end - 1].endsWith('\n') ? '\n' : '';
     const canonical = splitLines(entry.canonical);
-    if (canonical.length > 0) canonical[canonical.length - 1] = canonical[canonical.length - 1].replace(/\n$/, '') + ending;
+    if (canonical.length > 0) canonical[canonical.length - 1] = canonical[canonical.length - 1].replace(/\n$/, '') + lineEnding;
     base.push(...canonical);
     line = entry.end;
   }
@@ -394,38 +449,106 @@ export function mergeKeepingStyle(origin: Origin | null, editorText: string, val
 
   const baseIds = idsOf(base, table);
   const baseToOurs = lcsMap(baseIds, ourIds, MAX_LINE_DIFFERENCE);
-  const baseToTheirs = lcsMap(baseIds, idsOf(theirLines, table), MAX_LINE_DIFFERENCE);
-  if (!baseToOurs || !baseToTheirs) return theirs;
+  const baseToTheirs = lcsMap(baseIds, theirIds, MAX_LINE_DIFFERENCE);
+  if (!baseToOurs || !baseToTheirs) return editorText;
 
   const pieces: Piece[] = [];
   for (const chunk of diff3(base.length, ours.length, theirLines.length, baseToOurs, baseToTheirs)) {
     if (chunk.stable) {
-      pieces.push({ lines: base.slice(chunk.oStart, chunk.oStart + chunk.length) });
+      pieces.push({ start: chunk.bStart, end: chunk.bStart + chunk.length, lines: theirLines.slice(chunk.bStart, chunk.bStart + chunk.length), kind: 'same' });
       continue;
     }
     const o = base.slice(chunk.o[0], chunk.o[1]);
     const a = ours.slice(chunk.a[0], chunk.a[1]);
     const b = theirLines.slice(chunk.b[0], chunk.b[1]);
-    const same = (x: readonly string[], y: readonly string[]): boolean => x.length === y.length && x.every((value, index) => value === y[index]);
-    if (same(a, o)) pieces.push({ lines: b });
-    else if (same(b, o) || same(a, b)) pieces.push({ lines: a });
-    else pieces.push(mergeConflict(o, a, b));
+    const [start, end] = chunk.b;
+    if (sameLines(a, b) || sameLines(a, o)) {
+      pieces.push({ start, end, lines: b, kind: 'same' });
+    } else if (sameLines(b, o)) {
+      pieces.push({ start, end, lines: a, kind: 'ours' });
+    } else {
+      const merged = mergeConflict(o, a, b);
+      pieces.push(merged === null || sameLines(merged, b) ? { start, end, lines: b, kind: 'same' } : { start, end, lines: merged, kind: 'merged' });
+    }
+  }
+  if (pieces.every((piece) => piece.kind === 'same')) return editorText;
+
+  // Where each of the editor's blocks sits in its text.
+  const blocks = editor.currentBlocks();
+  const placed = blocks ? placeBlocks(theirs, theirLines, blocks) : null;
+  if (!placed || placed.length === 0) return editorText;
+
+  /** The blocks a stretch of the editor's text touches, as [first, last]. */
+  const blocksAt = (start: number, end: number): [number, number] => {
+    let first = placed.findIndex((block) => block.end > start);
+    if (first < 0) first = placed.length - 1;
+    let last = first;
+    while (last + 1 < placed.length && placed[last + 1].start < end) last += 1;
+    // A stretch that sits wholly between two blocks goes with the block before it.
+    if (placed[first].start >= Math.max(end, start + 1) && first > 0) first -= 1;
+    return [first, Math.max(first, last)];
+  };
+
+  // Group the changed pieces by the blocks they fall in. Each group is checked on its own.
+  const groups: Array<{ first: number; last: number; from: number; to: number }> = [];
+  for (const piece of pieces) {
+    if (piece.kind === 'same') continue;
+    const [first, last] = blocksAt(piece.start, piece.end);
+    const from = Math.min(piece.start, placed[first].start);
+    const to = Math.max(piece.end, placed[last].end);
+    const previous = groups[groups.length - 1];
+    if (previous && first <= previous.last) {
+      previous.last = Math.max(previous.last, last);
+      previous.from = Math.min(previous.from, from);
+      previous.to = Math.max(previous.to, to);
+    } else {
+      groups.push({ first, last, from, to });
+    }
   }
 
-  const assemble = (choose: (piece: Piece) => readonly string[]): string => pieces.map((piece) => choose(piece).join('')).join('');
-  const attempts = [
-    // Everything merged.
-    assemble((piece) => piece.lines),
+  const definitions = theirLines.filter((text) => DEFINITION.test(text));
+  const context = definitions.length > 0 ? `\n\n${definitions.map((text) => (text.endsWith('\n') ? text : `${text}\n`)).join('')}` : '';
+
+  type Choice = (piece: Piece) => readonly string[];
+  const merged: Choice = (piece) => piece.lines;
+  const choices: Choice[] = [
+    merged,
     // The same, with added list items given their siblings' marker.
-    assemble((piece) => (piece.conflict ? harmonizeListMarkers(piece.lines) : piece.lines)),
-    // Only whole-line choices: where characters had to be merged, the editor's lines.
-    assemble((piece) => (piece.conflict?.fine ? piece.conflict.theirs : piece.lines)),
+    (piece) => (piece.kind === 'merged' ? harmonizeListMarkers(piece.lines) : piece.lines),
+    // Only whole-line choices: where characters were merged, the editor's lines.
+    (piece) => (piece.kind === 'merged' ? theirLines.slice(piece.start, piece.end) : piece.lines),
   ];
-  const tried = new Set<string>([theirs]);
-  for (const candidate of attempts) {
-    if (tried.has(candidate)) continue;
-    tried.add(candidate);
-    if (validate(candidate, theirs)) return candidate;
+  const editorLines: Choice = (piece) => theirLines.slice(piece.start, piece.end);
+
+  const chosen = new Map<Piece, Choice>();
+  for (const group of groups) {
+    const inside = pieces.filter((piece) => (piece.end > group.from && piece.start < group.to) || (piece.start === piece.end && piece.start >= group.from && piece.start <= group.to && piece.kind !== 'same'));
+    /** The text of this group's blocks, with one of the choices applied. */
+    const textWith = (choice: Choice): string =>
+      inside
+        .map((piece) => {
+          if (piece.kind !== 'same') return choice(piece).join('');
+          // A piece of the editor's own lines may reach past the group. Take the part inside.
+          return theirLines.slice(Math.max(piece.start, group.from), Math.min(piece.end, group.to)).join('');
+        })
+        .join('');
+    const editorsOwn = textWith(editorLines);
+    const tried = new Set<string>([editorsOwn]);
+    let pick = editorLines;
+    for (const choice of choices) {
+      const candidate = textWith(choice);
+      if (tried.has(candidate)) continue;
+      tried.add(candidate);
+      if (editor.matchesBlocks(group.first, group.last + 1, candidate + context, editorsOwn + context)) {
+        pick = choice;
+        break;
+      }
+    }
+    for (const piece of inside) {
+      if (piece.kind !== 'same') chosen.set(piece, pick);
+    }
   }
-  return theirs;
+
+  const result = pieces.map((piece) => (piece.kind === 'same' ? piece.lines : (chosen.get(piece) ?? editorLines)(piece)).join('')).join('');
+  return result === theirs ? editorText : result;
 }

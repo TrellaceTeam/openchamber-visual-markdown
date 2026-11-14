@@ -19,7 +19,7 @@ import { createImageResolver } from './images';
 import { mermaidThemeFor } from './mermaidTheme';
 import { cleanTarget, documentFolder, hasScheme, resolveProjectPath } from './paths';
 import { buildReference } from './reference';
-import type { LoadedBlock } from './styleMerge';
+import type { EditorCheck, LoadedBlock } from './styleMerge';
 import { initialViewState, isEditorViewState, ViewStateKeeper } from './viewState';
 
 declare const __VM_VERSION__: string;
@@ -28,9 +28,8 @@ declare const __VM_UPSTREAM__: string;
 type EditorMessage = { readonly type?: unknown; readonly [key: string]: unknown };
 
 /** What patches/0004-host-bridge.patch publishes on `window.visualMarkdownEditor`. */
-interface EditorBridge {
+interface EditorBridge extends EditorCheck {
   describeBlocks: () => LoadedBlock[] | null;
-  matchesDocument: (markdown: string, alternative?: string) => boolean;
 }
 
 /** DOCUMENT_SYNC_PROTOCOL_VERSION in upstream's src/shared/documentSyncProtocol.ts. */
@@ -245,7 +244,7 @@ const sendUpdate = (force: boolean): void => {
   // Ask it how it would write each block, so an edit can keep the file's own style.
   const bridge = (window as unknown as { visualMarkdownEditor?: EditorBridge }).visualMarkdownEditor;
   try {
-    doc.setOrigin(bridge?.describeBlocks() ?? null, bridge ? (candidate, alternative) => bridge.matchesDocument(candidate, alternative) : null);
+    doc.setOrigin(bridge?.describeBlocks() ?? null, bridge ?? null);
   } catch (error) {
     log('style keeping is off for this file', error);
     doc.setOrigin(null, null);

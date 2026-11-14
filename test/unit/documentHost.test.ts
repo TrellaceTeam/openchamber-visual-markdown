@@ -124,7 +124,7 @@ test('with the editor blocks known, an edited block keeps the author style', () 
       { source: '# T', serialized: '# T' },
       { source: '* first\n* second', serialized: '- first\n- second' },
     ],
-    () => true,
+    { currentBlocks: () => ['# T', '- first\n- Zqsecond'], matchesBlocks: () => true },
   );
   doc.applyEditorContent('# T\n\n- first\n- Zqsecond');
   assert.equal(doc.text, '# T\n\n* first\n* Zqsecond\n');
@@ -132,25 +132,45 @@ test('with the editor blocks known, an edited block keeps the author style', () 
 
 test('when the merged text is not the document on screen, the editor text is saved', () => {
   const doc = host('* first\n* second\n');
-  doc.setOrigin([{ source: '* first\n* second', serialized: '- first\n- second' }], () => false);
+  doc.setOrigin([{ source: '* first\n* second', serialized: '- first\n- second' }], { currentBlocks: () => ['- first\n- Zqsecond'], matchesBlocks: () => false });
   doc.applyEditorContent('- first\n- Zqsecond');
   assert.equal(doc.text, '- first\n- Zqsecond\n');
 });
 
-test('a large document already being edited is merged once typing pauses', () => {
+test('a large document is merged once typing pauses, not on every edit', () => {
   const filler = `${'Filler paragraph.\n\n'.repeat(Math.ceil(SETTLE_INLINE_MAX / 19))}`;
   const saved = `${filler}* first\n* second\n`;
   const doc = host(saved);
   const fillerBlocks = filler.trimEnd().split('\n\n').map((source) => ({ source, serialized: source }));
-  doc.setOrigin([...fillerBlocks, { source: '* first\n* second', serialized: '- first\n- second' }], () => true);
+  let checks = 0;
+  doc.setOrigin([...fillerBlocks, { source: '* first\n* second', serialized: '- first\n- second' }], {
+    currentBlocks: () => [...fillerBlocks.map((block) => block.source), '- first\n- Zqsecond'],
+    matchesBlocks: () => {
+      checks += 1;
+      return true;
+    },
+  });
 
   doc.applyEditorContent(`${filler}- first\n- Zsecond`);
-  assert.equal(doc.text.endsWith('* first\n* Zsecond\n'), true, 'the first edit is merged at once');
   doc.applyEditorContent(`${filler}- first\n- Zqsecond`);
   assert.equal(doc.text.endsWith('- first\n- Zqsecond\n'), true, 'while typing, the editor text is taken as it comes');
+  assert.equal(doc.dirty, true);
+  assert.equal(checks, 0);
   assert.equal(doc.settle(), true);
   assert.equal(doc.text, `${filler}* first\n* Zqsecond\n`);
+  assert.equal(checks, 1);
   assert.equal(doc.settle(), false);
+});
+
+test('a large document that is back to its saved text is clean at once', () => {
+  const filler = `${'Filler paragraph.\n\n'.repeat(Math.ceil(SETTLE_INLINE_MAX / 19))}`;
+  const saved = `${filler}* first\n* second\n`;
+  const doc = host(saved);
+  doc.setOrigin([{ source: saved.trimEnd(), serialized: saved.trimEnd() }], { currentBlocks: () => null, matchesBlocks: () => false });
+  doc.applyEditorContent(`${filler}* first\n* second edited`);
+  assert.equal(doc.dirty, true);
+  doc.applyEditorContent(`${filler}* first\n* second`);
+  assert.equal(doc.dirty, false);
 });
 
 test('versionOf changes when the text does', () => {

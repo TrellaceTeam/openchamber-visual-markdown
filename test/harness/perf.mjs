@@ -41,6 +41,20 @@ await withHarness(async ({ server, newHost }) => {
       return { blocks: editor.state.doc.childCount, origin: window.visualMarkdownEditor.describeBlocks()?.filter((block) => block.source !== null).length };
     });
 
+    // Time what the page does with each edit the editor reports.
+    await frame.evaluate(() => {
+      const api = window.acquireVsCodeApi();
+      const original = api.postMessage;
+      window.__editTimes = [];
+      api.postMessage = (message) => {
+        if (!message || (message.type !== 'edit' && message.type !== 'flushPendingEditAck')) return original(message);
+        const started = performance.now();
+        const result = original(message);
+        window.__editTimes.push(`${message.type === 'edit' ? 'edit' : 'flush'} ${Math.round(performance.now() - started)}`);
+        return result;
+      };
+    });
+
     // Type before a word in the middle of the document.
     const middle = Math.floor(content.split('## Section ').length / 2);
     const needle = `second point with`;
@@ -66,9 +80,19 @@ await withHarness(async ({ server, newHost }) => {
     while (!(await hostState(page)).dirty && Date.now() - startedDirty < 20000) await page.waitForTimeout(50);
     const dirtyAfter = Date.now() - startedDirty;
 
+    // A second and third edit in the same place, as when someone keeps typing.
+    for (const more of ['a', 'b']) {
+      await frame.evaluate(([at, text]) => document.querySelector('.ProseMirror').editor.chain().insertContentAt(at, text).run(), [typed.at + 2, more]);
+      await page.waitForTimeout(700);
+    }
+    const idleStarted = Date.now();
+    await page.waitForTimeout(1600);
+    const longTasks = await frame.evaluate(() => window.__editTimes.join(', '));
+
     const startedSave = Date.now();
     const saved = await save(page);
     const saveTook = Date.now() - startedSave;
+    void idleStarted;
 
     const before = content.split('\n');
     const after = saved.split('\n');
@@ -76,6 +100,7 @@ await withHarness(async ({ server, newHost }) => {
     console.log(
       `${String(kilobytes).padStart(5)} KB  ${(content.length / 1024).toFixed(0)} KB real, ${info.blocks} blocks (${info.origin} with source)  open ${opened} ms  keystroke ${typed.ms} ms  marked changed after ${dirtyAfter} ms  save ${saveTook} ms  lines changed ${changed}`,
     );
+    console.log(`          handling each edit took (ms): ${longTasks}`);
     const noise = problems.filter((text) => !/favicon|status of 404/.test(text));
     if (noise.length > 0) console.log('   problems:', [...new Set(noise)].slice(0, 3).join(' | '));
     await page.close();
