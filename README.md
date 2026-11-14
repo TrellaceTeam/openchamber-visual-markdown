@@ -31,6 +31,13 @@ Then open any `.md` or `.markdown` file from the Files panel. The app's own butt
 
 Visual Markdown needs OpenChamber 2.7.0 or later.
 
+### Update it
+
+1. Open **Settings**, then **Extensions**, and choose the round arrow to check for updates.
+2. Open the menu on the Visual Markdown card and choose **Update**.
+
+If OpenChamber says it could not replace the installed files, choose **Disable** in the same menu, then **Update**, then **Enable**.
+
 ### The permission it asks for
 
 OpenChamber asks you to allow one thing: **Read and write project files**. Visual Markdown uses it to:
