@@ -20,10 +20,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-The editor in `editor/` is Markdown Editor for Humans by Concret.io
-(https://github.com/concretios/markdown-for-humans), used under the MIT License
-above. Visual Markdown is a separate project and is not made or endorsed by
-Concret.io. See THIRD-PARTY-NOTICES.md for every other package in the build.

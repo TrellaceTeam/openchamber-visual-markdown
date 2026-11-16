@@ -58,7 +58,7 @@ Visual Markdown keeps the author's text. For each block you edit, it compares th
 
 The tests cover 39 sample files that must open and save byte for byte, and 37 styles that must survive an edit. Those styles include `*` and `+` bullets, `1)` numbering, lists numbered all with `1.`, nested lists indented four spaces, loose lists, hand-wrapped paragraphs, quotes, both kinds of hard break, underscore emphasis, tilde code fences, reference links, backslash escapes, comments, compact and padded tables, front matter, and files with no final newline.
 
-Three cases still change more than the words you typed:
+Four cases still change more than the words you typed:
 
 - **A padded table whose cell gets wider.** Every row is padded again to line up, as you would do by hand.
 - **A heading underlined with `===` or `---`.** Editing it rewrites it as a `#` heading.

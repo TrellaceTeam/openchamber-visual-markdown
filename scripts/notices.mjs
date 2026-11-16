@@ -72,6 +72,8 @@ export function writeNotices({ root, upstream, pin, inputs }) {
     upstreamLicence,
     '```',
     '',
+    `Visual Markdown is a separate project. Concret.io did not make it and does not endorse it.`,
+    '',
     '## Icons',
     '',
     'The toolbar icons are [Codicons](https://github.com/microsoft/vscode-codicons) by Microsoft. The icon font is under the Creative Commons Attribution 4.0 International licence (CC BY 4.0), and its code under the MIT licence.',
